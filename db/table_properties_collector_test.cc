@@ -3,20 +3,17 @@
 //  COPYING file in the root directory) and Apache 2.0 License
 //  (found in the LICENSE.Apache file in the root directory).
 
-#include "db/table_properties_collector.h"
-
 #include <map>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "db/db_impl/db_impl.h"
 #include "db/dbformat.h"
-#include "file/sequence_file_reader.h"
-#include "file/writable_file_writer.h"
+#include "db/table_properties_collector.h"
+
+#include "db/db_impl/db_impl.h"
 #include "options/cf_options.h"
-#include "rocksdb/flush_block_policy.h"
 #include "rocksdb/table.h"
 #include "table/block_based/block_based_table_factory.h"
 #include "table/meta_blocks.h"
@@ -25,8 +22,9 @@
 #include "test_util/testharness.h"
 #include "test_util/testutil.h"
 #include "util/coding.h"
+#include "util/file_reader_writer.h"
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 
 class TablePropertiesTest : public testing::Test,
                             public testing::WithParamInterface<bool> {
@@ -40,23 +38,23 @@ class TablePropertiesTest : public testing::Test,
 namespace {
 static const uint32_t kTestColumnFamilyId = 66;
 static const std::string kTestColumnFamilyName = "test_column_fam";
-static const int kTestLevel = 1;
 
-void MakeBuilder(
-    const Options& options, const ImmutableOptions& ioptions,
-    const MutableCFOptions& moptions,
-    const InternalKeyComparator& internal_comparator,
-    const IntTblPropCollectorFactories* int_tbl_prop_collector_factories,
-    std::unique_ptr<WritableFileWriter>* writable,
-    std::unique_ptr<TableBuilder>* builder) {
-  std::unique_ptr<FSWritableFile> wf(new test::StringSink);
+void MakeBuilder(const Options& options, const ImmutableCFOptions& ioptions,
+                 const MutableCFOptions& moptions,
+                 const InternalKeyComparator& internal_comparator,
+                 const std::vector<std::unique_ptr<IntTblPropCollectorFactory>>*
+                     int_tbl_prop_collector_factories,
+                 std::unique_ptr<WritableFileWriter>* writable,
+                 std::unique_ptr<TableBuilder>* builder) {
+  std::unique_ptr<WritableFile> wf(new test::StringSink);
   writable->reset(
       new WritableFileWriter(std::move(wf), "" /* don't care */, EnvOptions()));
-  TableBuilderOptions tboptions(
+  int unknown_level = -1;
+  builder->reset(NewTableBuilder(
       ioptions, moptions, internal_comparator, int_tbl_prop_collector_factories,
-      options.compression, options.compression_opts, kTestColumnFamilyId,
-      kTestColumnFamilyName, kTestLevel);
-  builder->reset(NewTableBuilder(tboptions, writable->get()));
+      kTestColumnFamilyId, kTestColumnFamilyName, writable->get(),
+      options.compression, options.sample_for_compression,
+      options.compression_opts, unknown_level));
 }
 }  // namespace
 
@@ -176,9 +174,9 @@ class RegularKeysStartWithAInternal : public IntTblPropCollector {
     return Status::OK();
   }
 
-  void BlockAdd(uint64_t /* block_raw_bytes */,
-                uint64_t /* block_compressed_bytes_fast */,
-                uint64_t /* block_compressed_bytes_slow */) override {
+  void BlockAdd(uint64_t /* blockRawBytes */,
+                uint64_t /* blockCompressedBytesFast */,
+                uint64_t /* blockCompressedBytesSlow */) override {
     // Nothing to do.
     return;
   }
@@ -199,7 +197,6 @@ class RegularKeysStartWithAFactory : public IntTblPropCollectorFactory,
   TablePropertiesCollector* CreateTablePropertiesCollector(
       TablePropertiesCollectorFactory::Context context) override {
     EXPECT_EQ(kTestColumnFamilyId, context.column_family_id);
-    EXPECT_EQ(kTestLevel, context.level_at_creation);
     if (!backward_mode_) {
       return new RegularKeysStartWithA();
     } else {
@@ -207,7 +204,7 @@ class RegularKeysStartWithAFactory : public IntTblPropCollectorFactory,
     }
   }
   IntTblPropCollector* CreateIntTblPropCollector(
-      uint32_t /*column_family_id*/, int /* level_at_creation */) override {
+      uint32_t /*column_family_id*/) override {
     return new RegularKeysStartWithAInternal();
   }
   const char* Name() const override { return "RegularKeysStartWithA"; }
@@ -263,9 +260,10 @@ void TestCustomizedTablePropertiesCollector(
   // -- Step 1: build table
   std::unique_ptr<TableBuilder> builder;
   std::unique_ptr<WritableFileWriter> writer;
-  const ImmutableOptions ioptions(options);
+  const ImmutableCFOptions ioptions(options);
   const MutableCFOptions moptions(options);
-  IntTblPropCollectorFactories int_tbl_prop_collector_factories;
+  std::vector<std::unique_ptr<IntTblPropCollectorFactory>>
+      int_tbl_prop_collector_factories;
   if (test_int_tbl_prop_collector) {
     int_tbl_prop_collector_factories.emplace_back(
         new RegularKeysStartWithAFactory(backward_mode));
@@ -286,14 +284,14 @@ void TestCustomizedTablePropertiesCollector(
   // -- Step 2: Read properties
   test::StringSink* fwf =
       static_cast<test::StringSink*>(writer->writable_file());
-  std::unique_ptr<FSRandomAccessFile> source(
-      new test::StringSource(fwf->contents()));
   std::unique_ptr<RandomAccessFileReader> fake_file_reader(
-      new RandomAccessFileReader(std::move(source), "test"));
-
-  std::unique_ptr<TableProperties> props;
+      test::GetRandomAccessFileReader(
+          new test::StringSource(fwf->contents())));
+  TableProperties* props;
   Status s = ReadTableProperties(fake_file_reader.get(), fwf->contents().size(),
-                                 magic_number, ioptions, &props);
+                                 magic_number, ioptions, &props,
+                                 true /* compression_type_missing */);
+  std::unique_ptr<TableProperties> props_guard(props);
   ASSERT_OK(s);
 
   auto user_collected = props->user_collected_properties;
@@ -393,7 +391,8 @@ void TestInternalKeyPropertiesCollector(
   Options options;
   test::PlainInternalKeyComparator pikc(options.comparator);
 
-  IntTblPropCollectorFactories int_tbl_prop_collector_factories;
+  std::vector<std::unique_ptr<IntTblPropCollectorFactory>>
+      int_tbl_prop_collector_factories;
   options.table_factory = table_factory;
   if (sanitized) {
     options.table_properties_collector_factories.emplace_back(
@@ -406,11 +405,11 @@ void TestInternalKeyPropertiesCollector(
     options.info_log = std::make_shared<test::NullLogger>();
     options = SanitizeOptions("db",            // just a place holder
                               options);
-    ImmutableOptions ioptions(options);
+    ImmutableCFOptions ioptions(options);
     GetIntTblPropCollectorFactory(ioptions, &int_tbl_prop_collector_factories);
     options.comparator = comparator;
   }
-  const ImmutableOptions ioptions(options);
+  const ImmutableCFOptions ioptions(options);
   MutableCFOptions moptions(options);
 
   for (int iter = 0; iter < 2; ++iter) {
@@ -425,16 +424,16 @@ void TestInternalKeyPropertiesCollector(
 
     test::StringSink* fwf =
         static_cast<test::StringSink*>(writable->writable_file());
-    std::unique_ptr<FSRandomAccessFile> source(
-        new test::StringSource(fwf->contents()));
     std::unique_ptr<RandomAccessFileReader> reader(
-        new RandomAccessFileReader(std::move(source), "test"));
-
-    std::unique_ptr<TableProperties> props;
-    Status s = ReadTableProperties(reader.get(), fwf->contents().size(),
-                                   magic_number, ioptions, &props);
+        test::GetRandomAccessFileReader(
+            new test::StringSource(fwf->contents())));
+    TableProperties* props;
+    Status s =
+        ReadTableProperties(reader.get(), fwf->contents().size(), magic_number,
+                            ioptions, &props, true /* compression_type_missing */);
     ASSERT_OK(s);
 
+    std::unique_ptr<TableProperties> props_guard(props);
     auto user_collected = props->user_collected_properties;
     uint64_t deleted = GetDeletedKeys(user_collected);
     ASSERT_EQ(5u, deleted);  // deletes + single-deletes
@@ -504,7 +503,7 @@ INSTANTIATE_TEST_CASE_P(InternalKeyPropertiesCollector, TablePropertiesTest,
 INSTANTIATE_TEST_CASE_P(CustomizedTablePropertiesCollector, TablePropertiesTest,
                         ::testing::Bool());
 
-}  // namespace ROCKSDB_NAMESPACE
+}  // namespace rocksdb
 
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);

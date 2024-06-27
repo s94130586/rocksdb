@@ -17,7 +17,7 @@
 #include "utilities/persistent_cache/hash_table_evictable.h"
 #include "utilities/persistent_cache/lrulist.h"
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 
 //
 // Block Cache Tier Metadata
@@ -95,9 +95,9 @@ class BlockCacheTierMetadata {
     }
   };
 
-  using CacheFileIndexType =
-      EvictableHashTable<BlockCacheFile, BlockCacheFileHash,
-                         BlockCacheFileEqual>;
+  typedef EvictableHashTable<BlockCacheFile, BlockCacheFileHash,
+                             BlockCacheFileEqual>
+      CacheFileIndexType;
 
   // Block Lookup Index
   //
@@ -114,12 +114,12 @@ class BlockCacheTierMetadata {
     }
   };
 
-  using BlockIndexType = HashTable<BlockInfo*, Hash, Equal>;
+  typedef HashTable<BlockInfo*, Hash, Equal> BlockIndexType;
 
   CacheFileIndexType cache_file_index_;
   BlockIndexType block_index_;
 };
 
-}  // namespace ROCKSDB_NAMESPACE
+}  // namespace rocksdb
 
 #endif

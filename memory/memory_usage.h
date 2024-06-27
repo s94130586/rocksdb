@@ -5,19 +5,16 @@
 
 #pragma once
 
-#include <cstddef>
 #include <unordered_map>
 
-#include "rocksdb/rocksdb_namespace.h"
-
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 
 // Helper methods to estimate memroy usage by std containers.
 
 template <class Key, class Value, class Hash>
 size_t ApproximateMemoryUsage(
     const std::unordered_map<Key, Value, Hash>& umap) {
-  using Map = std::unordered_map<Key, Value, Hash>;
+  typedef std::unordered_map<Key, Value, Hash> Map;
   return sizeof(umap) +
          // Size of all items plus a next pointer for each item.
          (sizeof(typename Map::value_type) + sizeof(void*)) * umap.size() +
@@ -25,4 +22,4 @@ size_t ApproximateMemoryUsage(
          umap.bucket_count() * sizeof(void*);
 }
 
-}  // namespace ROCKSDB_NAMESPACE
+}  // namespace rocksdb

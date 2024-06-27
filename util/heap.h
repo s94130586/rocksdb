@@ -11,7 +11,7 @@
 #include "port/port.h"
 #include "util/autovector.h"
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 
 // Binary heap implementation optimized for use in multi-way merge sort.
 // Comparison to std::priority_queue:
@@ -72,12 +72,7 @@ class BinaryHeap {
 
   void pop() {
     assert(!empty());
-    if (data_.size() > 1) {
-      // Avoid self-move-assign, because it could cause problems with
-      // classes which are not prepared for this and it trips up the
-      // STL debugger when activated.
-      data_.front() = std::move(data_.back());
-    }
+    data_.front() = std::move(data_.back());
     data_.pop_back();
     if (!empty()) {
       downheap(get_root());
@@ -168,4 +163,4 @@ class BinaryHeap {
   size_t root_cmp_cache_ = port::kMaxSizet;
 };
 
-}  // namespace ROCKSDB_NAMESPACE
+}  // namespace rocksdb

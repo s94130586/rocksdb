@@ -6,8 +6,8 @@
 
 #include "test_util/transaction_test_util.h"
 
-#include <algorithm>
 #include <cinttypes>
+#include <algorithm>
 #include <numeric>
 #include <random>
 #include <string>
@@ -24,7 +24,7 @@
 #include "util/random.h"
 #include "util/string_util.h"
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 
 RandomTransactionInserter::RandomTransactionInserter(
     Random64* rand, const WriteOptions& write_options,
@@ -139,7 +139,7 @@ bool RandomTransactionInserter::DoInsert(DB* db, Transaction* txn,
 
   std::vector<uint16_t> set_vec(num_sets_);
   std::iota(set_vec.begin(), set_vec.end(), static_cast<uint16_t>(0));
-  RandomShuffle(set_vec.begin(), set_vec.end());
+  std::shuffle(set_vec.begin(), set_vec.end(), std::random_device{});
 
   // For each set, pick a key at random and increment it
   for (uint16_t set_i : set_vec) {
@@ -165,19 +165,12 @@ bool RandomTransactionInserter::DoInsert(DB* db, Transaction* txn,
       // Increment key
       std::string sum = ToString(int_value + incr);
       if (txn != nullptr) {
-        s = txn->SingleDelete(key);
+        s = txn->Put(key, sum);
         if (!get_for_update && (s.IsBusy() || s.IsTimedOut())) {
           // If the initial get was not for update, then the key is not locked
           // before put and put could fail due to concurrent writes.
           break;
         } else if (!s.ok()) {
-          // Since we did a GetForUpdate, SingleDelete should not fail.
-          fprintf(stderr, "SingleDelete returned an unexpected error: %s\n",
-                  s.ToString().c_str());
-          unexpected_error = true;
-        }
-        s = txn->Put(key, sum);
-        if (!s.ok()) {
           // Since we did a GetForUpdate, Put should not fail.
           fprintf(stderr, "Put returned an unexpected error: %s\n",
                   s.ToString().c_str());
@@ -204,10 +197,6 @@ bool RandomTransactionInserter::DoInsert(DB* db, Transaction* txn,
       if (with_prepare) {
         // Also try commit without prepare
         s = txn->Prepare();
-        if (!s.ok()) {
-          fprintf(stderr, "Prepare returned an unexpected error: %s\n",
-                  s.ToString().c_str());
-        }
         assert(s.ok());
         ROCKS_LOG_DEBUG(db->GetDBOptions().info_log,
                         "Prepare of %" PRIu64 " %s (%s)", txn->GetId(),
@@ -307,7 +296,7 @@ Status RandomTransactionInserter::Verify(DB* db, uint16_t num_sets,
 
   std::vector<uint16_t> set_vec(num_sets);
   std::iota(set_vec.begin(), set_vec.end(), static_cast<uint16_t>(0));
-  RandomShuffle(set_vec.begin(), set_vec.end());
+  std::shuffle(set_vec.begin(), set_vec.end(), std::random_device{});
 
   // For each set of keys with the same prefix, sum all the values
   for (uint16_t set_i : set_vec) {
@@ -360,7 +349,6 @@ Status RandomTransactionInserter::Verify(DB* db, uint16_t num_sets,
             static_cast<int>(key.size()), key.data(), int_value);
         total += int_value;
       }
-      iter->status().PermitUncheckedError();
       delete iter;
     }
 
@@ -394,6 +382,6 @@ Status RandomTransactionInserter::Verify(DB* db, uint16_t num_sets,
   return Status::OK();
 }
 
-}  // namespace ROCKSDB_NAMESPACE
+}  // namespace rocksdb
 
 #endif  // ROCKSDB_LITE

@@ -14,7 +14,7 @@
 #undef DeleteFile
 #endif
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 
 // This class contains APIs to stack rocksdb wrappers.Eg. Stack TTL over base d
 class StackableDB : public DB {
@@ -80,27 +80,12 @@ class StackableDB : public DB {
                      const Slice& val) override {
     return db_->Put(options, column_family, key, val);
   }
-  Status Put(const WriteOptions& options, ColumnFamilyHandle* column_family,
-             const Slice& key, const Slice& ts, const Slice& val) override {
-    return db_->Put(options, column_family, key, ts, val);
-  }
 
   using DB::Get;
   virtual Status Get(const ReadOptions& options,
                      ColumnFamilyHandle* column_family, const Slice& key,
                      PinnableSlice* value) override {
     return db_->Get(options, column_family, key, value);
-  }
-
-  using DB::GetMergeOperands;
-  virtual Status GetMergeOperands(
-      const ReadOptions& options, ColumnFamilyHandle* column_family,
-      const Slice& key, PinnableSlice* slice,
-      GetMergeOperandsOptions* get_merge_operands_options,
-      int* number_of_operands) override {
-    return db_->GetMergeOperands(options, column_family, key, slice,
-                                 get_merge_operands_options,
-                                 number_of_operands);
   }
 
   using DB::MultiGet;
@@ -145,16 +130,7 @@ class StackableDB : public DB {
                                              import_options, metadata, handle);
   }
 
-  using DB::VerifyFileChecksums;
-  Status VerifyFileChecksums(const ReadOptions& read_opts) override {
-    return db_->VerifyFileChecksums(read_opts);
-  }
-
   virtual Status VerifyChecksum() override { return db_->VerifyChecksum(); }
-
-  virtual Status VerifyChecksum(const ReadOptions& options) override {
-    return db_->VerifyChecksum(options);
-  }
 
   using DB::KeyMayExist;
   virtual bool KeyMayExist(const ReadOptions& options,
@@ -170,28 +146,12 @@ class StackableDB : public DB {
                         const Slice& key) override {
     return db_->Delete(wopts, column_family, key);
   }
-  Status Delete(const WriteOptions& wopts, ColumnFamilyHandle* column_family,
-                const Slice& key, const Slice& ts) override {
-    return db_->Delete(wopts, column_family, key, ts);
-  }
 
   using DB::SingleDelete;
   virtual Status SingleDelete(const WriteOptions& wopts,
                               ColumnFamilyHandle* column_family,
                               const Slice& key) override {
     return db_->SingleDelete(wopts, column_family, key);
-  }
-  Status SingleDelete(const WriteOptions& wopts,
-                      ColumnFamilyHandle* column_family, const Slice& key,
-                      const Slice& ts) override {
-    return db_->SingleDelete(wopts, column_family, key, ts);
-  }
-
-  using DB::DeleteRange;
-  Status DeleteRange(const WriteOptions& wopts,
-                     ColumnFamilyHandle* column_family, const Slice& start_key,
-                     const Slice& end_key) override {
-    return db_->DeleteRange(wopts, column_family, start_key, end_key);
   }
 
   using DB::Merge;
@@ -201,10 +161,8 @@ class StackableDB : public DB {
     return db_->Merge(options, column_family, key, value);
   }
 
-  using DB::Write;
-  virtual Status Write(const WriteOptions& opts, WriteBatch* updates,
-                       PostWriteCallback* callback) override {
-    return db_->Write(opts, updates, callback);
+  virtual Status Write(const WriteOptions& opts, WriteBatch* updates) override {
+    return db_->Write(opts, updates);
   }
 
   using DB::NewIterator;
@@ -298,13 +256,6 @@ class StackableDB : public DB {
     return db_->EnableAutoCompaction(column_family_handles);
   }
 
-  virtual void EnableManualCompaction() override {
-    return db_->EnableManualCompaction();
-  }
-  virtual void DisableManualCompaction() override {
-    return db_->DisableManualCompaction();
-  }
-
   using DB::NumberLevels;
   virtual int NumberLevels(ColumnFamilyHandle* column_family) override {
     return db_->NumberLevels(column_family);
@@ -325,10 +276,6 @@ class StackableDB : public DB {
   virtual const std::string& GetName() const override { return db_->GetName(); }
 
   virtual Env* GetEnv() const override { return db_->GetEnv(); }
-
-  virtual FileSystem* GetFileSystem() const override {
-    return db_->GetFileSystem();
-  }
 
   using DB::GetOptions;
   virtual Options GetOptions(ColumnFamilyHandle* column_family) const override {
@@ -374,17 +321,6 @@ class StackableDB : public DB {
     db_->GetLiveFilesMetaData(metadata);
   }
 
-  virtual Status GetLiveFilesChecksumInfo(
-      FileChecksumList* checksum_list) override {
-    return db_->GetLiveFilesChecksumInfo(checksum_list);
-  }
-
-  virtual Status GetLiveFilesStorageInfo(
-      const LiveFilesStorageInfoOptions& opts,
-      std::vector<LiveFileStorageInfo>* files) override {
-    return db_->GetLiveFilesStorageInfo(opts, files);
-  }
-
   virtual void GetColumnFamilyMetaData(ColumnFamilyHandle* column_family,
                                        ColumnFamilyMetaData* cf_meta) override {
     db_->GetColumnFamilyMetaData(column_family, cf_meta);
@@ -400,31 +336,6 @@ class StackableDB : public DB {
   using DB::EndBlockCacheTrace;
   Status EndBlockCacheTrace() override { return db_->EndBlockCacheTrace(); }
 
-  using DB::StartIOTrace;
-  Status StartIOTrace(const TraceOptions& options,
-                      std::unique_ptr<TraceWriter>&& trace_writer) override {
-    return db_->StartIOTrace(options, std::move(trace_writer));
-  }
-
-  using DB::EndIOTrace;
-  Status EndIOTrace() override { return db_->EndIOTrace(); }
-
-  using DB::StartTrace;
-  Status StartTrace(const TraceOptions& options,
-                    std::unique_ptr<TraceWriter>&& trace_writer) override {
-    return db_->StartTrace(options, std::move(trace_writer));
-  }
-
-  using DB::EndTrace;
-  Status EndTrace() override { return db_->EndTrace(); }
-
-  using DB::NewDefaultReplayer;
-  Status NewDefaultReplayer(const std::vector<ColumnFamilyHandle*>& handles,
-                            std::unique_ptr<TraceReader>&& reader,
-                            std::unique_ptr<Replayer>* replayer) override {
-    return db_->NewDefaultReplayer(handles, std::move(reader), replayer);
-  }
-
 #endif  // ROCKSDB_LITE
 
   virtual Status GetLiveFiles(std::vector<std::string>& vec, uint64_t* mfs,
@@ -436,47 +347,21 @@ class StackableDB : public DB {
     return db_->GetLatestSequenceNumber();
   }
 
-  Status IncreaseFullHistoryTsLow(ColumnFamilyHandle* column_family,
-                                  std::string ts_low) override {
-    return db_->IncreaseFullHistoryTsLow(column_family, ts_low);
-  }
-
-  Status GetFullHistoryTsLow(ColumnFamilyHandle* column_family,
-                             std::string* ts_low) override {
-    return db_->GetFullHistoryTsLow(column_family, ts_low);
+  virtual bool SetPreserveDeletesSequenceNumber(
+      SequenceNumber seqnum) override {
+    return db_->SetPreserveDeletesSequenceNumber(seqnum);
   }
 
   virtual Status GetSortedWalFiles(VectorLogPtr& files) override {
     return db_->GetSortedWalFiles(files);
   }
 
-  virtual Status GetCurrentWalFile(
-      std::unique_ptr<LogFile>* current_log_file) override {
-    return db_->GetCurrentWalFile(current_log_file);
-  }
-
-  virtual Status GetCreationTimeOfOldestFile(
-      uint64_t* creation_time) override {
-    return db_->GetCreationTimeOfOldestFile(creation_time);
-  }
-
-  // WARNING: This API is planned for removal in RocksDB 7.0 since it does not
-  // operate at the proper level of abstraction for a key-value store, and its
-  // contract/restrictions are poorly documented. For example, it returns non-OK
-  // `Status` for non-bottommost files and files undergoing compaction. Since we
-  // do not plan to maintain it, the contract will likely remain underspecified
-  // until its removal. Any user is encouraged to read the implementation
-  // carefully and migrate away from it when possible.
   virtual Status DeleteFile(std::string name) override {
     return db_->DeleteFile(name);
   }
 
   virtual Status GetDbIdentity(std::string& identity) const override {
     return db_->GetDbIdentity(identity);
-  }
-
-  virtual Status GetDbSessionId(std::string& session_id) const override {
-    return db_->GetDbSessionId(session_id);
   }
 
   using DB::SetOptions;
@@ -530,15 +415,9 @@ class StackableDB : public DB {
     return db_->DefaultColumnFamily();
   }
 
-#ifndef ROCKSDB_LITE
-  Status TryCatchUpWithPrimary() override {
-    return db_->TryCatchUpWithPrimary();
-  }
-#endif  // ROCKSDB_LITE
-
  protected:
   DB* db_;
   std::shared_ptr<DB> shared_db_ptr_;
 };
 
-}  // namespace ROCKSDB_NAMESPACE
+}  //  namespace rocksdb

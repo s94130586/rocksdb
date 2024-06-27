@@ -16,17 +16,15 @@
 
 #include <time.h>
 
-#include "rocksdb/rocksdb_namespace.h"
-
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 
 namespace port {
 
 // Avoid including winsock2.h for this definition
-struct timeval {
+typedef struct timeval {
   long tv_sec;
   long tv_usec;
-};
+} timeval;
 
 void gettimeofday(struct timeval* tv, struct timezone* tz);
 
@@ -39,7 +37,7 @@ inline struct tm* localtime_r(const time_t* timep, struct tm* result) {
 using port::timeval;
 using port::gettimeofday;
 using port::localtime_r;
-}  // namespace ROCKSDB_NAMESPACE
+}
 
 #else
 #include <time.h>

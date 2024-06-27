@@ -10,10 +10,9 @@
 #pragma once
 #include <vector>
 
-#include "db/dbformat.h"
 #include "rocksdb/db.h"
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 
 class SnapshotList;
 
@@ -24,7 +23,7 @@ class SnapshotImpl : public Snapshot {
   SequenceNumber number_;  // const after creation
   // It indicates the smallest uncommitted data at the time the snapshot was
   // taken. This is currently used by WritePrepared transactions to limit the
-  // scope of queries to IsInSnapshot.
+  // scope of queries to IsInSnpashot.
   SequenceNumber min_uncommitted_ = kMinUnCommittedSeq;
 
   virtual SequenceNumber GetSequenceNumber() const override { return number_; }
@@ -165,4 +164,4 @@ class SnapshotList {
   uint64_t count_;
 };
 
-}  // namespace ROCKSDB_NAMESPACE
+}  // namespace rocksdb

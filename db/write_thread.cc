@@ -6,6 +6,7 @@
 #include "db/write_thread.h"
 
 #include <chrono>
+#include <iostream>
 #include <thread>
 
 #include "db/column_family.h"
@@ -14,7 +15,7 @@
 #include "test_util/sync_point.h"
 #include "util/random.h"
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 
 WriteThread::WriteThread(const ImmutableDBOptions& db_options)
     : max_yield_usec_(db_options.enable_write_thread_adaptive_yield
@@ -24,8 +25,7 @@ WriteThread::WriteThread(const ImmutableDBOptions& db_options)
       allow_concurrent_memtable_write_(
           db_options.allow_concurrent_memtable_write),
       enable_pipelined_write_(db_options.enable_pipelined_write),
-      max_write_batch_group_size_bytes(
-          db_options.max_write_batch_group_size_bytes),
+      enable_multi_thread_write_(db_options.enable_multi_thread_write),
       newest_writer_(nullptr),
       newest_memtable_writer_(nullptr),
       last_sequence_(0),
@@ -63,7 +63,7 @@ uint8_t WriteThread::BlockingAwaitState(Writer* w, uint8_t goal_mask) {
 
 uint8_t WriteThread::AwaitState(Writer* w, uint8_t goal_mask,
                                 AdaptationContext* ctx) {
-  uint8_t state = 0;
+  uint8_t state;
 
   // 1. Busy loop using "pause" for 1 micro sec
   // 2. Else SOMETIMES busy loop using "yield" for 100 micro sec (default)
@@ -141,6 +141,30 @@ uint8_t WriteThread::AwaitState(Writer* w, uint8_t goal_mask,
   // 1/sampling_base.
   const int sampling_base = 256;
 
+  if (enable_multi_thread_write_) {
+    auto spin_begin = std::chrono::steady_clock::now();
+    while ((state & goal_mask) == 0) {
+      if (write_queue_.RunFunc()) {
+        spin_begin = std::chrono::steady_clock::now();
+      } else {
+        std::this_thread::yield();
+        auto now = std::chrono::steady_clock::now();
+        // If there is no task in the queue for a long time, we should block
+        // this thread to avoid costing too much CPU. Because there may be a
+        // large WriteBatch writing into memtable.
+        if ((now - spin_begin) > std::chrono::microseconds(max_yield_usec_)) {
+          break;
+        }
+      }
+      state = w->state.load(std::memory_order_acquire);
+    }
+    if ((state & goal_mask) == 0) {
+      TEST_SYNC_POINT_CALLBACK("WriteThread::AwaitState:BlockingWaiting", w);
+      state = BlockingAwaitState(w, goal_mask);
+    }
+    return state;
+  }
+
   if (max_yield_usec_ > 0) {
     update_ctx = Random::GetTLSInstance()->OneIn(sampling_base);
 
@@ -210,7 +234,6 @@ uint8_t WriteThread::AwaitState(Writer* w, uint8_t goal_mask,
 }
 
 void WriteThread::SetState(Writer* w, uint8_t new_state) {
-  assert(w);
   auto state = w->state.load(std::memory_order_acquire);
   if (state == STATE_LOCKED_WAITING ||
       !w->state.compare_exchange_strong(state, new_state)) {
@@ -243,7 +266,6 @@ bool WriteThread::LinkOne(Writer* w, std::atomic<Writer*>* newest_writer) {
         MutexLock lock(&stall_mu_);
         writers = newest_writer->load(std::memory_order_relaxed);
         if (writers == &write_stall_dummy_) {
-          TEST_SYNC_POINT_CALLBACK("WriteThread::WriteStall::Wait", w);
           stall_cv_.Wait();
           // Load newest_writers_ again since it may have changed
           writers = newest_writer->load(std::memory_order_relaxed);
@@ -348,15 +370,6 @@ void WriteThread::BeginWriteStall() {
       prev->link_older = w->link_older;
       w->status = Status::Incomplete("Write stall");
       SetState(w, STATE_COMPLETED);
-      // Only update `link_newer` if it's already set.
-      // `CreateMissingNewerLinks()` will update the nullptr `link_newer` later,
-      // which assumes the the first non-nullptr `link_newer` is the last
-      // nullptr link in the writer list.
-      // If `link_newer` is set here, `CreateMissingNewerLinks()` may stop
-      // updating the whole list when it sees the first non nullptr link.
-      if (prev->link_older && prev->link_older->link_newer) {
-        prev->link_older->link_newer = prev;
-      }
       w = prev->link_older;
     } else {
       prev = w;
@@ -368,11 +381,7 @@ void WriteThread::BeginWriteStall() {
 void WriteThread::EndWriteStall() {
   MutexLock lock(&stall_mu_);
 
-  // Unlink write_stall_dummy_ from the write queue. This will unblock
-  // pending write threads to enqueue themselves
   assert(newest_writer_.load(std::memory_order_relaxed) == &write_stall_dummy_);
-  assert(write_stall_dummy_.link_older != nullptr);
-  write_stall_dummy_.link_older->link_newer = write_stall_dummy_.link_newer;
   newest_writer_.exchange(write_stall_dummy_.link_older);
 
   // Wake up writers
@@ -382,7 +391,7 @@ void WriteThread::EndWriteStall() {
 static WriteThread::AdaptationContext jbg_ctx("JoinBatchGroup");
 void WriteThread::JoinBatchGroup(Writer* w) {
   TEST_SYNC_POINT_CALLBACK("WriteThread::JoinBatchGroup:Start", w);
-  assert(!w->multi_batch.batches.empty());
+  assert(!w->batches.empty());
 
   bool linked_as_leader = LinkOne(w, &newest_writer_);
 
@@ -417,18 +426,17 @@ void WriteThread::JoinBatchGroup(Writer* w) {
 size_t WriteThread::EnterAsBatchGroupLeader(Writer* leader,
                                             WriteGroup* write_group) {
   assert(leader->link_older == nullptr);
-  assert(!leader->multi_batch.batches.empty());
+  assert(!leader->batches.empty());
   assert(write_group != nullptr);
 
-  size_t size = WriteBatchInternal::ByteSize(leader->multi_batch.batches);
+  size_t size = WriteBatchInternal::ByteSize(leader->batches);
 
   // Allow the group to grow up to a maximum size, but if the
   // original write is small, limit the growth so we do not slow
   // down the small write too much.
-  size_t max_size = max_write_batch_group_size_bytes;
-  const uint64_t min_batch_size_bytes = max_write_batch_group_size_bytes / 8;
-  if (size <= min_batch_size_bytes) {
-    max_size = size + min_batch_size_bytes;
+  size_t max_size = 1 << 20;
+  if (size <= (128 << 10)) {
+    max_size = size + (128 << 10);
   }
 
   leader->write_group = write_group;
@@ -448,7 +456,6 @@ size_t WriteThread::EnterAsBatchGroupLeader(Writer* leader,
   // (newest_writer) is inclusive. Iteration goes from old to new.
   Writer* w = leader;
   while (w != newest_writer) {
-    assert(w->link_newer);
     w = w->link_newer;
 
     if (w->sync && !leader->sync) {
@@ -462,29 +469,24 @@ size_t WriteThread::EnterAsBatchGroupLeader(Writer* leader,
       break;
     }
 
-    if (w->disable_wal != leader->disable_wal) {
-      // Do not mix writes that enable WAL with the ones whose
+    if (!w->disable_wal && leader->disable_wal) {
+      // Do not include a write that needs WAL into a batch that has
       // WAL disabled.
       break;
     }
 
-    if (w->protection_bytes_per_key != leader->protection_bytes_per_key) {
-      // Do not mix writes with different levels of integrity protection.
-      break;
-    }
-
-    if (w->multi_batch.batches.empty()) {
+    if (w->batches.empty()) {
       // Do not include those writes with nullptr batch. Those are not writes,
       // those are something else. They want to be alone
       break;
     }
 
     if (w->callback != nullptr && !w->callback->AllowWriteBatching()) {
-      // don't batch writes that don't want to be batched
+      // dont batch writes that don't want to be batched
       break;
     }
 
-    auto batch_size = WriteBatchInternal::ByteSize(w->multi_batch.batches);
+    auto batch_size = WriteBatchInternal::ByteSize(w->batches);
     if (size + batch_size > max_size) {
       // Do not make batch too big
       break;
@@ -504,18 +506,17 @@ void WriteThread::EnterAsMemTableWriter(Writer* leader,
                                         WriteGroup* write_group) {
   assert(leader != nullptr);
   assert(leader->link_older == nullptr);
-  assert(!leader->multi_batch.batches.empty());
+  assert(!leader->batches.empty());
   assert(write_group != nullptr);
 
-  size_t size = WriteBatchInternal::ByteSize(leader->multi_batch.batches);
+  size_t size = WriteBatchInternal::ByteSize(leader->batches);
 
   // Allow the group to grow up to a maximum size, but if the
   // original write is small, limit the growth so we do not slow
   // down the small write too much.
-  size_t max_size = max_write_batch_group_size_bytes;
-  const uint64_t min_batch_size_bytes = max_write_batch_group_size_bytes / 8;
-  if (size <= min_batch_size_bytes) {
-    max_size = size + min_batch_size_bytes;
+  size_t max_size = 1 << 20;
+  if (size <= (128 << 10)) {
+    max_size = size + (128 << 10);
   }
 
   leader->write_group = write_group;
@@ -523,26 +524,25 @@ void WriteThread::EnterAsMemTableWriter(Writer* leader,
   write_group->size = 1;
   Writer* last_writer = leader;
 
-  if (!allow_concurrent_memtable_write_ ||
-      !leader->multi_batch.batches[0]->HasMerge()) {
+  if (!allow_concurrent_memtable_write_ || enable_multi_thread_write_ ||
+      !leader->batches[0]->HasMerge()) {
     Writer* newest_writer = newest_memtable_writer_.load();
     CreateMissingNewerLinks(newest_writer);
 
     Writer* w = leader;
     while (w != newest_writer) {
-      assert(w->link_newer);
       w = w->link_newer;
 
-      if (w->multi_batch.batches.empty()) {
+      if (w->batches.empty()) {
         break;
       }
 
-      if (w->multi_batch.batches[0]->HasMerge()) {
+      if (!enable_multi_thread_write_ && w->batches[0]->HasMerge()) {
         break;
       }
 
       if (!allow_concurrent_memtable_write_) {
-        auto batch_size = WriteBatchInternal::ByteSize(w->multi_batch.batches);
+        auto batch_size = WriteBatchInternal::ByteSize(w->batches);
         if (size + batch_size > max_size) {
           // Do not make batch too big
           break;
@@ -557,9 +557,9 @@ void WriteThread::EnterAsMemTableWriter(Writer* leader,
   }
 
   write_group->last_writer = last_writer;
-  write_group->last_sequence =
-      last_writer->sequence +
-      WriteBatchInternal::Count(last_writer->multi_batch.batches) - 1;
+  write_group->last_sequence = last_writer->sequence +
+                               WriteBatchInternal::Count(last_writer->batches) -
+                               1;
 }
 
 void WriteThread::ExitAsMemTableWriter(Writer* /*self*/,
@@ -588,7 +588,6 @@ void WriteThread::ExitAsMemTableWriter(Writer* /*self*/,
     if (w == last_writer) {
       break;
     }
-    assert(next);
     w = next;
   }
   // Note that leader has to exit last, since it owns the write group.
@@ -620,8 +619,6 @@ bool WriteThread::CompleteParallelMemTableWriter(Writer* w) {
   }
   // else we're the last parallel worker and should perform exit duties.
   w->status = write_group->status;
-  // Callers of this function must ensure w->status is checked.
-  write_group->status.PermitUncheckedError();
   return true;
 }
 
@@ -638,16 +635,10 @@ void WriteThread::ExitAsBatchGroupFollower(Writer* w) {
 
 static WriteThread::AdaptationContext eabgl_ctx("ExitAsBatchGroupLeader");
 void WriteThread::ExitAsBatchGroupLeader(WriteGroup& write_group,
-                                         Status& status) {
+                                         Status status) {
   Writer* leader = write_group.leader;
   Writer* last_writer = write_group.last_writer;
   assert(leader->link_older == nullptr);
-
-  // If status is non-ok already, then write_group.status won't have the chance
-  // of being propagated to caller.
-  if (!status.ok()) {
-    write_group.status.PermitUncheckedError();
-  }
 
   // Propagate memtable write error to the whole group.
   if (status.ok() && !write_group.status.ok()) {
@@ -750,7 +741,6 @@ void WriteThread::ExitAsBatchGroupLeader(WriteGroup& write_group,
     // leader now
 
     while (last_writer != leader) {
-      assert(last_writer);
       last_writer->status = status;
       // we need to read link_older before calling SetState, because as soon
       // as it is marked committed the other thread's Await may return and
@@ -765,7 +755,7 @@ void WriteThread::ExitAsBatchGroupLeader(WriteGroup& write_group,
 
 static WriteThread::AdaptationContext eu_ctx("EnterUnbatched");
 void WriteThread::EnterUnbatched(Writer* w, InstrumentedMutex* mu) {
-  assert(w != nullptr && w->multi_batch.batches.empty());
+  assert(w != nullptr && w->batches.empty());
   mu->Unlock();
   bool linked_as_leader = LinkOne(w, &newest_writer_);
   if (!linked_as_leader) {
@@ -804,69 +794,4 @@ void WriteThread::WaitForMemTableWriters() {
   newest_memtable_writer_.store(nullptr);
 }
 
-RequestQueue::RequestQueue() {}
-
-RequestQueue::~RequestQueue() {}
-
-void RequestQueue::Enter(CommitRequest* req) {
-  std::unique_lock<std::mutex> guard(commit_mu_);
-  requests_.push_back(req);
-}
-
-void RequestQueue::CommitSequenceAwait(CommitRequest* req,
-                                       std::atomic<uint64_t>* commit_sequence) {
-  std::unique_lock<std::mutex> guard(commit_mu_);
-  while (!requests_.empty() && requests_.front() != req && !req->committed) {
-    // When the subsequent commit finds that the front writer has not yet
-    // submitted, it will help the front writer to perform some tasks
-    auto front = requests_.front()->writer;
-    if (front->ConsumableOnOtherThreads()) {
-      auto claimed = front->Claim();
-      if (claimed < front->multi_batch.batches.size()) {
-        guard.unlock();
-        front->ConsumeOne(claimed);
-        guard.lock();
-        continue;
-      }
-    } else {
-      // The front writer may be waiting for this helper writer
-      commit_cv_.notify_all();
-    }
-    commit_cv_.wait(guard);
-  }
-  if (req->committed) {
-    return;
-  } else if (requests_.front() == req) {
-    // As the front writer, some write tasks can be stolen by other writers.
-    // Wait for them to finish.
-    while (req->writer->HasPendingWB()) {
-      commit_cv_.wait(guard);
-    }
-    while (!requests_.empty() && !requests_.front()->writer->HasPendingWB()) {
-      CommitRequest* current = requests_.front();
-      commit_sequence->store(current->commit_lsn, std::memory_order_release);
-      current->committed = true;
-      requests_.pop_front();
-    }
-    commit_cv_.notify_all();
-  }
-}
-
-void WriteThread::Writer::ConsumeOne(size_t claimed) {
-  assert(claimed < multi_batch.batches.size());
-  ColumnFamilyMemTablesImpl memtables(multi_batch.version_set);
-  Status s = WriteBatchInternal::InsertInto(
-      multi_batch.batches[claimed], &memtables, multi_batch.flush_scheduler,
-      multi_batch.trim_history_scheduler,
-      multi_batch.ignore_missing_column_families, 0, this->log_ref,
-      multi_batch.db, true);
-  if (!s.ok()) {
-    std::lock_guard<SpinMutex> guard(this->status_lock);
-    this->status = s;
-  } else if (post_callback) {
-    post_callback->Callback(sequence);
-  }
-  multi_batch.pending_wb_cnt.fetch_sub(1, std::memory_order_acq_rel);
-}
-
-}  // namespace ROCKSDB_NAMESPACE
+}  // namespace rocksdb

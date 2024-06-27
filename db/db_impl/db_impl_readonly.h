@@ -11,15 +11,11 @@
 #include <vector>
 #include "db/db_impl/db_impl.h"
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 
 class DBImplReadOnly : public DBImpl {
  public:
   DBImplReadOnly(const DBOptions& options, const std::string& dbname);
-  // No copying allowed
-  DBImplReadOnly(const DBImplReadOnly&) = delete;
-  void operator=(const DBImplReadOnly&) = delete;
-
   virtual ~DBImplReadOnly();
 
   // Implementations of the DB interface
@@ -63,9 +59,8 @@ class DBImplReadOnly : public DBImpl {
                               const Slice& /*key*/) override {
     return Status::NotSupported("Not supported operation in read only mode.");
   }
-  using DBImpl::Write;
-  virtual Status Write(const WriteOptions& /*options*/, WriteBatch* /*updates*/,
-                       PostWriteCallback* /*callback*/) override {
+  virtual Status Write(const WriteOptions& /*options*/,
+                       WriteBatch* /*updates*/) override {
     return Status::NotSupported("Not supported operation in read only mode.");
   }
   using DBImpl::CompactRange;
@@ -131,17 +126,12 @@ class DBImplReadOnly : public DBImpl {
   }
 
  private:
-  // A "helper" function for DB::OpenForReadOnly without column families
-  // to reduce unnecessary I/O
-  // It has the same functionality as DB::OpenForReadOnly with column families
-  // but does not check the existence of dbname in the file system
-  static Status OpenForReadOnlyWithoutCheck(
-      const DBOptions& db_options, const std::string& dbname,
-      const std::vector<ColumnFamilyDescriptor>& column_families,
-      std::vector<ColumnFamilyHandle*>* handles, DB** dbptr,
-      bool error_if_wal_file_exists = false);
   friend class DB;
+
+  // No copying allowed
+  DBImplReadOnly(const DBImplReadOnly&);
+  void operator=(const DBImplReadOnly&);
 };
-}  // namespace ROCKSDB_NAMESPACE
+}  // namespace rocksdb
 
 #endif  // !ROCKSDB_LITE

@@ -15,9 +15,9 @@
 #include "util/hash.h"
 #include "util/random.h"
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 
-using Key = uint64_t;
+typedef uint64_t Key;
 
 struct TestComparator {
   int operator()(const Key& a, const Key& b) const {
@@ -169,7 +169,7 @@ class ConcurrentTest {
   static uint64_t hash(Key key) { return key & 0xff; }
 
   static uint64_t HashNumbers(uint64_t k, uint64_t g) {
-    uint64_t data[2] = {k, g};
+    uint64_t data[2] = { k, g };
     return Hash(reinterpret_cast<char*>(data), sizeof(data), 0);
   }
 
@@ -311,7 +311,11 @@ class TestState {
   int seed_;
   std::atomic<bool> quit_flag_;
 
-  enum ReaderState { STARTING, RUNNING, DONE };
+  enum ReaderState {
+    STARTING,
+    RUNNING,
+    DONE
+  };
 
   explicit TestState(int s)
       : seed_(s), quit_flag_(false), state_(STARTING), state_cv_(&mu_) {}
@@ -340,9 +344,11 @@ class TestState {
 static void ConcurrentReader(void* arg) {
   TestState* state = reinterpret_cast<TestState*>(arg);
   Random rnd(state->seed_);
+  int64_t reads = 0;
   state->Change(TestState::RUNNING);
   while (!state->quit_flag_.load(std::memory_order_acquire)) {
     state->t_.ReadStep(&rnd);
+    ++reads;
   }
   state->Change(TestState::DONE);
 }
@@ -374,7 +380,7 @@ TEST_F(SkipTest, Concurrent3) { RunConcurrent(3); }
 TEST_F(SkipTest, Concurrent4) { RunConcurrent(4); }
 TEST_F(SkipTest, Concurrent5) { RunConcurrent(5); }
 
-}  // namespace ROCKSDB_NAMESPACE
+}  // namespace rocksdb
 
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);

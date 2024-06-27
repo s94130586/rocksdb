@@ -4,19 +4,19 @@
 //  (found in the LICENSE.Apache file in the root directory).
 //
 #pragma once
-#include <algorithm>
+#include "rocksdb/statistics.h"
+
 #include <atomic>
-#include <cinttypes>
-#include <cstdio>
 #include <map>
 #include <string>
 #include <vector>
+#include <cstdio>
+#include <algorithm>
+#include <cinttypes>
 
 #include "monitoring/histogram.h"
 #include "port/likely.h"
 #include "port/port.h"
-#include "rocksdb/statistics.h"
-#include "rocksdb/utilities/options_type.h"
 #include "util/core_local.h"
 #include "util/mutexlock.h"
 
@@ -31,7 +31,7 @@
 #define TOSTRING(x) STRINGIFY(x)
 #endif
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 
 template <uint32_t TICKER_MAX = TICKER_ENUM_MAX,
           uint32_t HISTOGRAM_MAX = HISTOGRAM_ENUM_MAX>
@@ -39,8 +39,6 @@ class StatisticsImpl : public Statistics {
  public:
   StatisticsImpl(std::shared_ptr<Statistics> stats);
   virtual ~StatisticsImpl();
-  const char* Name() const override { return kClassName(); }
-  static const char* kClassName() { return "BasicStatistics"; }
 
   virtual uint64_t getTickerCount(uint32_t ticker_type) const override;
   virtual void histogramData(uint32_t histogram_type,
@@ -65,8 +63,6 @@ class StatisticsImpl : public Statistics {
   virtual bool getTickerMap(std::map<std::string, uint64_t>*) const override;
   virtual bool HistEnabledForType(uint32_t type) const override;
 
-  const Customizable* Inner() const override { return stats_.get(); }
-
  private:
   // If non-nullptr, forwards updates to the object pointed to by `stats_`.
   std::shared_ptr<Statistics> stats_;
@@ -89,14 +85,13 @@ class StatisticsImpl : public Statistics {
                    HISTOGRAM_MAX * sizeof(HistogramImpl)) %
                       CACHE_LINE_SIZE)] ROCKSDB_FIELD_UNUSED;
 #endif
-    void* operator new(size_t s) { return port::cacheline_aligned_alloc(s); }
-    void* operator new[](size_t s) { return port::cacheline_aligned_alloc(s); }
-    void operator delete(void* p) { port::cacheline_aligned_free(p); }
-    void operator delete[](void* p) { port::cacheline_aligned_free(p); }
+    void *operator new(size_t s) { return port::cacheline_aligned_alloc(s); }
+    void *operator new[](size_t s) { return port::cacheline_aligned_alloc(s); }
+    void operator delete(void *p) { port::cacheline_aligned_free(p); }
+    void operator delete[](void *p) { port::cacheline_aligned_free(p); }
   };
 
-  static_assert(sizeof(StatisticsData) % CACHE_LINE_SIZE == 0,
-                "Expected " TOSTRING(CACHE_LINE_SIZE) "-byte aligned");
+  static_assert(sizeof(StatisticsData) % CACHE_LINE_SIZE == 0, "Expected " TOSTRING(CACHE_LINE_SIZE) "-byte aligned");
 
   CoreLocalArray<StatisticsData> per_core_stats_;
 
@@ -106,20 +101,10 @@ class StatisticsImpl : public Statistics {
   void setTickerCountLocked(uint32_t ticker_type, uint64_t count);
 };
 
-static std::unordered_map<std::string, OptionTypeInfo> stats_type_info = {
-#ifndef ROCKSDB_LITE
-    {"inner", OptionTypeInfo::AsCustomSharedPtr<Statistics>(
-                  0, OptionVerificationType::kByNameAllowFromNull,
-                  OptionTypeFlags::kCompareNever)},
-#endif  // !ROCKSDB_LITE
-};
-
 template <uint32_t TICKER_MAX, uint32_t HISTOGRAM_MAX>
 StatisticsImpl<TICKER_MAX, HISTOGRAM_MAX>::StatisticsImpl(
     std::shared_ptr<Statistics> stats)
-    : stats_(std::move(stats)) {
-  RegisterOptions("StatisticsOptions", &stats_, &stats_type_info);
-}
+    : stats_(std::move(stats)) {}
 
 template <uint32_t TICKER_MAX, uint32_t HISTOGRAM_MAX>
 StatisticsImpl<TICKER_MAX, HISTOGRAM_MAX>::~StatisticsImpl() {}
@@ -216,17 +201,11 @@ uint64_t StatisticsImpl<TICKER_MAX, HISTOGRAM_MAX>::getAndResetTickerCount(
 template <uint32_t TICKER_MAX, uint32_t HISTOGRAM_MAX>
 void StatisticsImpl<TICKER_MAX, HISTOGRAM_MAX>::recordTick(uint32_t tickerType,
                                                            uint64_t count) {
-  if (get_stats_level() <= StatsLevel::kExceptTickers) {
-    return;
-  }
-  if (tickerType < TICKER_MAX) {
-    per_core_stats_.Access()->tickers_[tickerType].fetch_add(
-        count, std::memory_order_relaxed);
-    if (stats_) {
-      stats_->recordTick(tickerType, count);
-    }
-  } else {
-    assert(false);
+  assert(tickerType < TICKER_MAX);
+  per_core_stats_.Access()->tickers_[tickerType].fetch_add(
+      count, std::memory_order_relaxed);
+  if (stats_ && tickerType < TICKER_MAX) {
+    stats_->recordTick(tickerType, count);
   }
 }
 
@@ -262,7 +241,7 @@ namespace {
 // a buffer size used for temp string buffers
 const int kTmpStrBufferSize = 200;
 
-}  // namespace
+} // namespace
 
 template <uint32_t TICKER_MAX, uint32_t HISTOGRAM_MAX>
 std::string StatisticsImpl<TICKER_MAX, HISTOGRAM_MAX>::ToString() const {
@@ -319,4 +298,11 @@ bool StatisticsImpl<TICKER_MAX, HISTOGRAM_MAX>::HistEnabledForType(
   return type < HISTOGRAM_MAX;
 }
 
-}  // namespace ROCKSDB_NAMESPACE
+template <uint32_t TICKER_MAX, uint32_t HISTOGRAM_MAX>
+std::shared_ptr<Statistics> CreateDBStatistics() {
+  return std::make_shared<StatisticsImpl<TICKER_MAX, HISTOGRAM_MAX>>(nullptr);
+}
+// Explicitly instantiate templates to make it possible to keep the template definitions in this file.
+template std::shared_ptr<Statistics> CreateDBStatistics<TICKER_ENUM_MAX, HISTOGRAM_ENUM_MAX>();
+
+}

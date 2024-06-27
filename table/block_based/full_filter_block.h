@@ -7,20 +7,19 @@
 
 #include <stddef.h>
 #include <stdint.h>
-
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "rocksdb/filter_policy.h"
+#include "db/dbformat.h"
 #include "rocksdb/options.h"
 #include "rocksdb/slice.h"
 #include "rocksdb/slice_transform.h"
 #include "table/block_based/filter_block_reader_common.h"
-#include "table/block_based/parsed_full_filter_block.h"
+#include "table/format.h"
 #include "util/hash.h"
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 
 class FilterPolicy;
 class FilterBitsBuilder;
@@ -41,35 +40,21 @@ class FullFilterBlockBuilder : public FilterBlockBuilder {
   explicit FullFilterBlockBuilder(const SliceTransform* prefix_extractor,
                                   bool whole_key_filtering,
                                   FilterBitsBuilder* filter_bits_builder);
-  // No copying allowed
-  FullFilterBlockBuilder(const FullFilterBlockBuilder&) = delete;
-  void operator=(const FullFilterBlockBuilder&) = delete;
-
   // bits_builder is created in filter_policy, it should be passed in here
   // directly. and be deleted here
   ~FullFilterBlockBuilder() {}
 
   virtual bool IsBlockBased() override { return false; }
   virtual void StartBlock(uint64_t /*block_offset*/) override {}
-  virtual void Add(const Slice& key_without_ts) override;
-  virtual bool IsEmpty() const override { return !any_added_; }
-  virtual size_t EstimateEntriesAdded() override;
-  virtual Slice Finish(
-      const BlockHandle& tmp, Status* status,
-      std::unique_ptr<const char[]>* filter_data = nullptr) override;
+  virtual void Add(const Slice& key) override;
+  virtual size_t NumAdded() const override { return num_added_; }
+  virtual Slice Finish(const BlockHandle& tmp, Status* status) override;
   using FilterBlockBuilder::Finish;
-
-  virtual void ResetFilterBitsBuilder() override {
-    filter_bits_builder_.reset();
-  }
 
  protected:
   virtual void AddKey(const Slice& key);
   std::unique_ptr<FilterBitsBuilder> filter_bits_builder_;
   virtual void Reset();
-  void AddPrefix(const Slice& key);
-  const SliceTransform* prefix_extractor() { return prefix_extractor_; }
-  const std::string& last_prefix_str() const { return last_prefix_str_; }
 
  private:
   // important: all of these might point to invalid addresses
@@ -81,27 +66,28 @@ class FullFilterBlockBuilder : public FilterBlockBuilder {
   std::string last_whole_key_str_;
   bool last_prefix_recorded_;
   std::string last_prefix_str_;
-  // Whether prefix_extractor_->InDomain(last_whole_key_) is true.
-  // Used in partitioned filters so that the last prefix from the previous
-  // filter partition will be added to the current partition if
-  // last_key_in_domain_ is true, regardless of the current key.
-  bool last_key_in_domain_;
-  bool any_added_;
+
+  uint32_t num_added_;
   std::unique_ptr<const char[]> filter_data_;
+
+  void AddPrefix(const Slice& key);
+
+  // No copying allowed
+  FullFilterBlockBuilder(const FullFilterBlockBuilder&);
+  void operator=(const FullFilterBlockBuilder&);
 };
 
 // A FilterBlockReader is used to parse filter from SST table.
 // KeyMayMatch and PrefixMayMatch would trigger filter checking
-class FullFilterBlockReader
-    : public FilterBlockReaderCommon<ParsedFullFilterBlock> {
+class FullFilterBlockReader : public FilterBlockReaderCommon<BlockContents> {
  public:
   FullFilterBlockReader(const BlockBasedTable* t,
-                        CachableEntry<ParsedFullFilterBlock>&& filter_block);
+                        CachableEntry<BlockContents>&& filter_block);
 
   static std::unique_ptr<FilterBlockReader> Create(
-      const BlockBasedTable* table, const ReadOptions& ro,
-      FilePrefetchBuffer* prefetch_buffer, bool use_cache, bool prefetch,
-      bool pin, BlockCacheLookupContext* lookup_context);
+      const BlockBasedTable* table, FilePrefetchBuffer* prefetch_buffer,
+      bool use_cache, bool prefetch, bool pin,
+      BlockCacheLookupContext* lookup_context);
 
   bool IsBlockBased() override { return false; }
 
@@ -131,14 +117,13 @@ class FullFilterBlockReader
                      const SliceTransform* prefix_extractor,
                      const Comparator* comparator,
                      const Slice* const const_ikey_ptr, bool* filter_checked,
-                     bool need_upper_bound_check, bool no_io,
+                     bool need_upper_bound_check,
                      BlockCacheLookupContext* lookup_context) override;
 
  private:
   bool MayMatch(const Slice& entry, bool no_io, GetContext* get_context,
                 BlockCacheLookupContext* lookup_context) const;
   void MayMatch(MultiGetRange* range, bool no_io,
-                const SliceTransform* prefix_extractor,
                 BlockCacheLookupContext* lookup_context) const;
   bool IsFilterCompatible(const Slice* iterate_upper_bound, const Slice& prefix,
                           const Comparator* comparator) const;
@@ -148,4 +133,4 @@ class FullFilterBlockReader
   size_t prefix_extractor_full_length_;
 };
 
-}  // namespace ROCKSDB_NAMESPACE
+}  // namespace rocksdb

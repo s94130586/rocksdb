@@ -9,22 +9,21 @@
 
 #include "monitoring/histogram.h"
 
-#include <stdio.h>
-
-#include <algorithm>
-#include <cassert>
 #include <cinttypes>
-#include <cmath>
+#include <cassert>
+#include <math.h>
+#include <stdio.h>
 
 #include "port/port.h"
 #include "util/cast_util.h"
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 
 HistogramBucketMapper::HistogramBucketMapper() {
   // If you change this, you also need to change
   // size of array buckets_ in HistogramImpl
   bucketValues_ = {1, 2};
+  valueIndexMap_ = {{1, 0}, {2, 1}};
   double bucket_val = static_cast<double>(bucketValues_.back());
   while ((bucket_val = 1.5 * bucket_val) <= static_cast<double>(port::kMaxUint64)) {
     bucketValues_.push_back(static_cast<uint64_t>(bucket_val));
@@ -36,18 +35,26 @@ HistogramBucketMapper::HistogramBucketMapper() {
       pow_of_ten *= 10;
     }
     bucketValues_.back() *= pow_of_ten;
+    valueIndexMap_[bucketValues_.back()] = bucketValues_.size() - 1;
   }
   maxBucketValue_ = bucketValues_.back();
   minBucketValue_ = bucketValues_.front();
 }
 
 size_t HistogramBucketMapper::IndexForValue(const uint64_t value) const {
-  auto beg = bucketValues_.begin();
-  auto end = bucketValues_.end();
-  if (value >= maxBucketValue_)
-    return end - beg - 1;  // bucketValues_.size() - 1
-  else
-    return std::lower_bound(beg, end, value) - beg;
+  if (value >= maxBucketValue_) {
+    return bucketValues_.size() - 1;
+  } else if ( value >= minBucketValue_ ) {
+    std::map<uint64_t, uint64_t>::const_iterator lowerBound =
+      valueIndexMap_.lower_bound(value);
+    if (lowerBound != valueIndexMap_.end()) {
+      return static_cast<size_t>(lowerBound->second);
+    } else {
+      return 0;
+    }
+  } else {
+    return 0;
+  }
 }
 
 namespace {
@@ -170,7 +177,7 @@ double HistogramStat::StandardDeviation() const {
   double variance =
       static_cast<double>(cur_sum_squares * cur_num - cur_sum * cur_sum) /
       static_cast<double>(cur_num * cur_num);
-  return std::sqrt(variance);
+  return sqrt(variance);
 }
 std::string HistogramStat::ToString() const {
   uint64_t cur_num = num();
@@ -244,7 +251,8 @@ void HistogramImpl::Add(uint64_t value) {
 
 void HistogramImpl::Merge(const Histogram& other) {
   if (strcmp(Name(), other.Name()) == 0) {
-    Merge(*static_cast_with_check<const HistogramImpl>(&other));
+    Merge(
+        *static_cast_with_check<const HistogramImpl, const Histogram>(&other));
   }
 }
 
@@ -277,4 +285,4 @@ void HistogramImpl::Data(HistogramData * const data) const {
   stats_.Data(data);
 }
 
-}  // namespace ROCKSDB_NAMESPACE
+} // namespace levedb

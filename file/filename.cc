@@ -12,48 +12,18 @@
 #include <ctype.h>
 #include <stdio.h>
 #include <vector>
-#include "file/writable_file_writer.h"
+#include "logging/logging.h"
 #include "rocksdb/env.h"
 #include "test_util/sync_point.h"
+#include "util/file_reader_writer.h"
 #include "util/stop_watch.h"
 #include "util/string_util.h"
 
-namespace ROCKSDB_NAMESPACE {
-
-const std::string kCurrentFileName = "CURRENT";
-const std::string kOptionsFileNamePrefix = "OPTIONS-";
-const std::string kTempFileNameSuffix = "dbtmp";
+namespace rocksdb {
 
 static const std::string kRocksDbTFileExt = "sst";
 static const std::string kLevelDbTFileExt = "ldb";
 static const std::string kRocksDBBlobFileExt = "blob";
-static const std::string kArchivalDirName = "archive";
-static const std::string kUnencryptedTempFileNameSuffix = "dbtmp.plain";
-
-bool IsCurrentFile(const std::string& fname) {
-  // skip CURRENT file.
-  size_t current_length = strlen("CURRENT");
-  if (fname.length() >= current_length &&
-      !fname.compare(fname.length() - current_length, current_length,
-                     "CURRENT")) {
-    return true;
-  }
-  // skip temporary file for CURRENT file.
-  size_t temp_length = kUnencryptedTempFileNameSuffix.length();
-  if (fname.length() >= temp_length &&
-      !fname.compare(fname.length() - temp_length, temp_length,
-                     kUnencryptedTempFileNameSuffix)) {
-    return true;
-  }
-  return false;
-}
-
-bool IsValidCurrentFile(std::unique_ptr<rocksdb::SequentialFile> seq_file) {
-  Slice result;
-  char scratch[64];
-  seq_file->Read(8, &result, scratch);
-  return result.compare("MANIFEST") == 0;
-}
 
 // Given a path, flatten the path name by replacing all chars not in
 // {[0-9,a-z,A-Z,-,_,.]} with _. And append '_LOG\0' at the end.
@@ -87,31 +57,18 @@ static size_t GetInfoLogPrefix(const std::string& path, char* dest, int len) {
   return write_idx;
 }
 
-static std::string MakeFileName(uint64_t number, const char* suffix) {
-  char buf[100];
-  snprintf(buf, sizeof(buf), "%06llu.%s",
-           static_cast<unsigned long long>(number), suffix);
-  return buf;
-}
-
 static std::string MakeFileName(const std::string& name, uint64_t number,
                                 const char* suffix) {
-  return name + "/" + MakeFileName(number, suffix);
+  char buf[100];
+  snprintf(buf, sizeof(buf), "/%06llu.%s",
+           static_cast<unsigned long long>(number),
+           suffix);
+  return name + buf;
 }
 
 std::string LogFileName(const std::string& name, uint64_t number) {
   assert(number > 0);
   return MakeFileName(name, number, "log");
-}
-
-std::string LogFileName(uint64_t number) {
-  assert(number > 0);
-  return MakeFileName(number, "log");
-}
-
-std::string BlobFileName(uint64_t number) {
-  assert(number > 0);
-  return MakeFileName(number, kRocksDBBlobFileExt.c_str());
 }
 
 std::string BlobFileName(const std::string& blobdirname, uint64_t number) {
@@ -127,19 +84,15 @@ std::string BlobFileName(const std::string& dbname, const std::string& blob_dir,
 }
 
 std::string ArchivalDirectory(const std::string& dir) {
-  return dir + "/" + kArchivalDirName;
+  return dir + "/" + ARCHIVAL_DIR;
 }
 std::string ArchivedLogFileName(const std::string& name, uint64_t number) {
   assert(number > 0);
-  return MakeFileName(name + "/" + kArchivalDirName, number, "log");
+  return MakeFileName(name + "/" + ARCHIVAL_DIR, number, "log");
 }
 
 std::string MakeTableFileName(const std::string& path, uint64_t number) {
   return MakeFileName(path, number, kRocksDbTFileExt.c_str());
-}
-
-std::string MakeTableFileName(uint64_t number) {
-  return MakeFileName(number, kRocksDbTFileExt.c_str());
 }
 
 std::string Rocks2LevelTableFileName(const std::string& fullname) {
@@ -186,20 +139,16 @@ void FormatFileNumber(uint64_t number, uint32_t path_id, char* out_buf,
   }
 }
 
-std::string DescriptorFileName(uint64_t number) {
+std::string DescriptorFileName(const std::string& dbname, uint64_t number) {
   assert(number > 0);
   char buf[100];
-  snprintf(buf, sizeof(buf), "MANIFEST-%06llu",
+  snprintf(buf, sizeof(buf), "/MANIFEST-%06llu",
            static_cast<unsigned long long>(number));
-  return buf;
-}
-
-std::string DescriptorFileName(const std::string& dbname, uint64_t number) {
-  return dbname + "/" + DescriptorFileName(number);
+  return dbname + buf;
 }
 
 std::string CurrentFileName(const std::string& dbname) {
-  return dbname + "/" + kCurrentFileName;
+  return dbname + "/CURRENT";
 }
 
 std::string LockFileName(const std::string& dbname) {
@@ -210,10 +159,6 @@ std::string TempFileName(const std::string& dbname, uint64_t number) {
   return MakeFileName(dbname, number, kTempFileNameSuffix.c_str());
 }
 
-std::string TempPlainFileName(const std::string& dbname, uint64_t number) {
-  return MakeFileName(dbname, number, kUnencryptedTempFileNameSuffix.c_str());
-}
-
 InfoLogPrefix::InfoLogPrefix(bool has_log_dir,
                              const std::string& db_absolute_path) {
   if (!has_log_dir) {
@@ -222,8 +167,7 @@ InfoLogPrefix::InfoLogPrefix(bool has_log_dir,
     snprintf(buf, sizeof(buf), kInfoLogPrefix);
     prefix = Slice(buf, sizeof(kInfoLogPrefix) - 1);
   } else {
-    size_t len =
-        GetInfoLogPrefix(NormalizePath(db_absolute_path), buf, sizeof(buf));
+    size_t len = GetInfoLogPrefix(db_absolute_path, buf, sizeof(buf));
     prefix = Slice(buf, len);
   }
 }
@@ -252,14 +196,11 @@ std::string OldInfoLogFileName(const std::string& dbname, uint64_t ts,
   return log_dir + "/" + info_log_prefix.buf + ".old." + buf;
 }
 
-std::string OptionsFileName(uint64_t file_num) {
+std::string OptionsFileName(const std::string& dbname, uint64_t file_num) {
   char buffer[256];
   snprintf(buffer, sizeof(buffer), "%s%06" PRIu64,
            kOptionsFileNamePrefix.c_str(), file_num);
-  return buffer;
-}
-std::string OptionsFileName(const std::string& dbname, uint64_t file_num) {
-  return dbname + "/" + OptionsFileName(file_num);
+  return dbname + "/" + buffer;
 }
 
 std::string TempOptionsFileName(const std::string& dbname, uint64_t file_num) {
@@ -373,12 +314,11 @@ bool ParseFileName(const std::string& fname, uint64_t* number,
     // Avoid strtoull() to keep filename format independent of the
     // current locale
     bool archive_dir_found = false;
-    if (rest.starts_with(kArchivalDirName)) {
-      if (rest.size() <= kArchivalDirName.size()) {
+    if (rest.starts_with(ARCHIVAL_DIR)) {
+      if (rest.size() <= ARCHIVAL_DIR.size()) {
         return false;
       }
-      rest.remove_prefix(kArchivalDirName.size() +
-                         1);  // Add 1 to remove / also
+      rest.remove_prefix(ARCHIVAL_DIR.size() + 1); // Add 1 to remove / also
       if (log_type) {
         *log_type = kArchivedLogFile;
       }
@@ -395,7 +335,7 @@ bool ParseFileName(const std::string& fname, uint64_t* number,
 
     Slice suffix = rest;
     if (suffix == Slice("log")) {
-      *type = kWalFile;
+      *type = kLogFile;
       if (log_type && !archive_dir_found) {
         *log_type = kAliveLogFile;
       }
@@ -416,84 +356,60 @@ bool ParseFileName(const std::string& fname, uint64_t* number,
   return true;
 }
 
-IOStatus SetCurrentFile(FileSystem* fs, const std::string& dbname,
-                        uint64_t descriptor_number,
-                        FSDirectory* directory_to_fsync) {
+Status SetCurrentFile(Env* env, const std::string& dbname,
+                      uint64_t descriptor_number,
+                      Directory* directory_to_fsync) {
   // Remove leading "dbname/" and add newline to manifest file name
   std::string manifest = DescriptorFileName(dbname, descriptor_number);
   Slice contents = manifest;
   assert(contents.starts_with(dbname + "/"));
   contents.remove_prefix(dbname.size() + 1);
-  std::string tmp = TempPlainFileName(dbname, descriptor_number);
-  IOStatus s = WriteStringToFile(fs, contents.ToString() + "\n", tmp, true);
-  TEST_SYNC_POINT_CALLBACK("SetCurrentFile:BeforeRename", &s);
+  std::string tmp = TempFileName(dbname, descriptor_number);
+  Status s = WriteStringToFile(env, contents.ToString() + "\n", tmp, true);
   if (s.ok()) {
-    TEST_KILL_RANDOM_WITH_WEIGHT("SetCurrentFile:0", REDUCE_ODDS2);
-    s = fs->RenameFile(tmp, CurrentFileName(dbname), IOOptions(), nullptr);
-    TEST_KILL_RANDOM_WITH_WEIGHT("SetCurrentFile:1", REDUCE_ODDS2);
-    TEST_SYNC_POINT_CALLBACK("SetCurrentFile:AfterRename", &s);
+    TEST_KILL_RANDOM("SetCurrentFile:0", rocksdb_kill_odds * REDUCE_ODDS2);
+    s = env->RenameFile(tmp, CurrentFileName(dbname));
+    TEST_KILL_RANDOM("SetCurrentFile:1", rocksdb_kill_odds * REDUCE_ODDS2);
   }
   if (s.ok()) {
     if (directory_to_fsync != nullptr) {
-      s = directory_to_fsync->FsyncWithDirOptions(
-          IOOptions(), nullptr, DirFsyncOptions(CurrentFileName(dbname)));
+      s = directory_to_fsync->Fsync();
     }
   } else {
-    fs->DeleteFile(tmp, IOOptions(), nullptr)
-        .PermitUncheckedError();  // NOTE: PermitUncheckedError is acceptable
-                                  // here as we are already handling an error
-                                  // case, and this is just a best-attempt
-                                  // effort at some cleanup
+    env->DeleteFile(tmp);
   }
   return s;
 }
 
-Status SetIdentityFile(Env* env, const std::string& dbname,
-                       const std::string& db_id) {
-  std::string id;
-  if (db_id.empty()) {
-    id = env->GenerateUniqueId();
-  } else {
-    id = db_id;
-  }
+Status SetIdentityFile(Env* env, const std::string& dbname) {
+  std::string id = env->GenerateUniqueId();
   assert(!id.empty());
   // Reserve the filename dbname/000000.dbtmp for the temporary identity file
   std::string tmp = TempFileName(dbname, 0);
-  std::string identify_file_name = IdentityFileName(dbname);
   Status s = WriteStringToFile(env, id, tmp, true);
   if (s.ok()) {
-    s = env->RenameFile(tmp, identify_file_name);
-  }
-  std::unique_ptr<FSDirectory> dir_obj;
-  if (s.ok()) {
-    s = env->GetFileSystem()->NewDirectory(dbname, IOOptions(), &dir_obj,
-                                           nullptr);
-  }
-  if (s.ok()) {
-    s = dir_obj->FsyncWithDirOptions(IOOptions(), nullptr,
-                                     DirFsyncOptions(identify_file_name));
+    s = env->RenameFile(tmp, IdentityFileName(dbname));
   }
   if (!s.ok()) {
-    env->DeleteFile(tmp).PermitUncheckedError();
+    env->DeleteFile(tmp);
   }
   return s;
 }
 
-IOStatus SyncManifest(const ImmutableDBOptions* db_options,
-                      WritableFileWriter* file) {
-  TEST_KILL_RANDOM_WITH_WEIGHT("SyncManifest:0", REDUCE_ODDS2);
-  StopWatch sw(db_options->clock, db_options->stats, MANIFEST_FILE_SYNC_MICROS);
+Status SyncManifest(Env* env, const ImmutableDBOptions* db_options,
+                    WritableFileWriter* file) {
+  TEST_KILL_RANDOM("SyncManifest:0", rocksdb_kill_odds * REDUCE_ODDS2);
+  StopWatch sw(env, db_options->statistics.get(), MANIFEST_FILE_SYNC_MICROS);
   return file->Sync(db_options->use_fsync);
 }
 
-Status GetInfoLogFiles(const std::shared_ptr<FileSystem>& fs,
-                       const std::string& db_log_dir, const std::string& dbname,
-                       std::string* parent_dir,
+Status GetInfoLogFiles(Env* env, const std::string& db_log_dir,
+                       const std::string& dbname, std::string* parent_dir,
                        std::vector<std::string>* info_log_list) {
   assert(parent_dir != nullptr);
   assert(info_log_list != nullptr);
   uint64_t number = 0;
-  FileType type = kWalFile;
+  FileType type = kLogFile;
 
   if (!db_log_dir.empty()) {
     *parent_dir = db_log_dir;
@@ -504,7 +420,7 @@ Status GetInfoLogFiles(const std::shared_ptr<FileSystem>& fs,
   InfoLogPrefix info_log_prefix(!db_log_dir.empty(), dbname);
 
   std::vector<std::string> file_names;
-  Status s = fs->GetChildren(*parent_dir, IOOptions(), &file_names, nullptr);
+  Status s = env->GetChildren(*parent_dir, &file_names);
 
   if (!s.ok()) {
     return s;
@@ -519,16 +435,4 @@ Status GetInfoLogFiles(const std::shared_ptr<FileSystem>& fs,
   return Status::OK();
 }
 
-std::string NormalizePath(const std::string& path) {
-  std::string dst;
-  for (auto c : path) {
-    if (!dst.empty() && (c == kFilePathSeparator || c == '/') &&
-        (dst.back() == kFilePathSeparator || dst.back() == '/')) {
-      continue;
-    }
-    dst.push_back(c);
-  }
-  return dst;
-}
-
-}  // namespace ROCKSDB_NAMESPACE
+}  // namespace rocksdb

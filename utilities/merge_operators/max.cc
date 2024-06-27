@@ -9,9 +9,9 @@
 #include "rocksdb/slice.h"
 #include "utilities/merge_operators.h"
 
-using ROCKSDB_NAMESPACE::Logger;
-using ROCKSDB_NAMESPACE::MergeOperator;
-using ROCKSDB_NAMESPACE::Slice;
+using rocksdb::Slice;
+using rocksdb::Logger;
+using rocksdb::MergeOperator;
 
 namespace {  // anonymous namespace
 
@@ -64,17 +64,14 @@ class MaxOperator : public MergeOperator {
     return true;
   }
 
-  static const char* kClassName() { return "MaxOperator"; }
-  static const char* kNickName() { return "max"; }
-  const char* Name() const override { return kClassName(); }
-  const char* NickName() const override { return kNickName(); }
+  const char* Name() const override { return "MaxOperator"; }
 };
 
 }  // end of anonymous namespace
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 
 std::shared_ptr<MergeOperator> MergeOperators::CreateMaxOperator() {
   return std::make_shared<MaxOperator>();
 }
-}  // namespace ROCKSDB_NAMESPACE
+}

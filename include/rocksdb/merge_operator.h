@@ -10,10 +10,9 @@
 #include <string>
 #include <vector>
 
-#include "rocksdb/customizable.h"
 #include "rocksdb/slice.h"
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 
 class Slice;
 class Logger;
@@ -44,16 +43,10 @@ class Logger;
 //
 // Refer to rocksdb-merge wiki for more details and example implementations.
 //
-// Exceptions MUST NOT propagate out of overridden functions into RocksDB,
-// because RocksDB is not exception-safe. This could cause undefined behavior
-// including data loss, unreported corruption, deadlocks, and more.
-class MergeOperator : public Customizable {
+class MergeOperator {
  public:
   virtual ~MergeOperator() {}
   static const char* Type() { return "MergeOperator"; }
-  static Status CreateFromString(const ConfigOptions& opts,
-                                 const std::string& id,
-                                 std::shared_ptr<MergeOperator>* result);
 
   // Gives the client a way to express the read -> modify -> write semantics
   // key:      (IN)    The key that's associated with this merge operation.
@@ -81,18 +74,28 @@ class MergeOperator : public Customizable {
     return false;
   }
 
+  enum MergeValueType : unsigned char {
+    kDeletion = 0x0,
+    kValue = 0x1,
+    kBlobIndex = 0x2,
+  };
+
   struct MergeOperationInput {
-    explicit MergeOperationInput(const Slice& _key,
+    explicit MergeOperationInput(const Slice& _key, MergeValueType _value_type,
                                  const Slice* _existing_value,
                                  const std::vector<Slice>& _operand_list,
                                  Logger* _logger)
         : key(_key),
+          value_type(_value_type),
           existing_value(_existing_value),
           operand_list(_operand_list),
           logger(_logger) {}
 
     // The key associated with the merge operation.
     const Slice& key;
+    // The value type associated with the existing_value, ignore this field
+    // if existing_value is nullptr.
+    const MergeValueType value_type;
     // The existing value of the current key, nullptr means that the
     // value doesn't exist.
     const Slice* existing_value;
@@ -114,9 +117,11 @@ class MergeOperator : public Customizable {
     // client can set this field to the operand (or existing_value) instead of
     // using new_value.
     Slice& existing_operand;
+    // new value type of merge result.
+    MergeValueType new_type{kValue};
   };
 
-  // This function applies a stack of merge operands in chronological order
+  // This function applies a stack of merge operands in chrionological order
   // on top of an existing value. There are two ways in which this method is
   // being used:
   // a) During Get() operation, it used to calculate the final value of a key
@@ -132,7 +137,7 @@ class MergeOperator : public Customizable {
   // In the example above, Get(K) operation will call FullMerge with a base
   // value of 2 and operands [+1, +2]. Compaction process might decide to
   // collapse the beginning of the history up to the snapshot by performing
-  // full Merge with base value of 0 and operands [+1, +2, +7, +4].
+  // full Merge with base value of 0 and operands [+1, +2, +7, +3].
   virtual bool FullMergeV2(const MergeOperationInput& merge_in,
                            MergeOperationOutput* merge_out) const;
 
@@ -183,7 +188,7 @@ class MergeOperator : public Customizable {
   // PartialMergeMulti should combine them into a single merge operation that is
   // saved into *new_value, and then it should return true.  *new_value should
   // be constructed such that a call to DB::Merge(key, *new_value) would yield
-  // the same result as sequential individual calls to DB::Merge(key, operand)
+  // the same result as subquential individual calls to DB::Merge(key, operand)
   // for each operand in operand_list from front() to back().
   //
   // The string that new_value is pointing to will be empty.
@@ -205,7 +210,7 @@ class MergeOperator : public Customizable {
   // TODO: the name is currently not stored persistently and thus
   //       no checking is enforced. Client is responsible for providing
   //       consistent MergeOperator between DB opens.
-  virtual const char* Name() const override = 0;
+  virtual const char* Name() const = 0;
 
   // Determines whether the PartialMerge can be called with just a single
   // merge operand.
@@ -261,4 +266,4 @@ class AssociativeMergeOperator : public MergeOperator {
                     Logger* logger) const override;
 };
 
-}  // namespace ROCKSDB_NAMESPACE
+}  // namespace rocksdb

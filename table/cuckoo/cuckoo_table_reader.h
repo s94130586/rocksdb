@@ -14,20 +14,21 @@
 #include <utility>
 #include <vector>
 
-#include "file/random_access_file_reader.h"
+#include "db/dbformat.h"
+#include "options/cf_options.h"
 #include "rocksdb/env.h"
 #include "rocksdb/options.h"
 #include "table/table_reader.h"
+#include "util/file_reader_writer.h"
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 
 class Arena;
 class TableReader;
-struct ImmutableOptions;
 
 class CuckooTableReader: public TableReader {
  public:
-  CuckooTableReader(const ImmutableOptions& ioptions,
+  CuckooTableReader(const ImmutableCFOptions& ioptions,
                     std::unique_ptr<RandomAccessFileReader>&& file,
                     uint64_t file_size, const Comparator* user_comparator,
                     uint64_t (*get_slice_hash)(const Slice&, uint32_t,
@@ -50,9 +51,7 @@ class CuckooTableReader: public TableReader {
   InternalIterator* NewIterator(const ReadOptions&,
                                 const SliceTransform* prefix_extractor,
                                 Arena* arena, bool skip_filters,
-                                TableReaderCaller caller,
-                                size_t compaction_readahead_size = 0,
-                                bool allow_unprepared_value = false) override;
+                                TableReaderCaller caller, size_t compaction_readahead_size = 0) override;
   void Prepare(const Slice& target) override;
 
   // Report an approximation of how much memory has been used.
@@ -63,12 +62,6 @@ class CuckooTableReader: public TableReader {
                                TableReaderCaller /*caller*/) override {
     return 0;
   }
-
-  uint64_t ApproximateSize(const Slice& /*start*/, const Slice& /*end*/,
-                           TableReaderCaller /*caller*/) override {
-    return 0;
-  }
-
   void SetupForCompaction() override {}
   // End of methods not implemented.
 
@@ -96,5 +89,5 @@ class CuckooTableReader: public TableReader {
       uint64_t max_num_buckets);
 };
 
-}  // namespace ROCKSDB_NAMESPACE
+}  // namespace rocksdb
 #endif  // ROCKSDB_LITE

@@ -9,16 +9,11 @@
 
 #pragma once
 
-#include <stdint.h>
+#include "rocksdb/env.h"
+#include "rocksdb/statistics.h"
 
-#include <string>
+namespace rocksdb {
 
-#include "rocksdb/rocksdb_namespace.h"
-
-namespace ROCKSDB_NAMESPACE {
-
-// This is NOT an extensible interface but a public interface for result of
-// NewConcurrentTaskLimiter. Any derived classes must be RocksDB internal.
 class ConcurrentTaskLimiter {
  public:
   virtual ~ConcurrentTaskLimiter() {}
@@ -38,7 +33,7 @@ class ConcurrentTaskLimiter {
   virtual int32_t GetOutstandingTask() const = 0;
 };
 
-// Create a ConcurrentTaskLimiter that can be shared with multiple CFs
+// Create a ConcurrentTaskLimiter that can be shared with mulitple CFs
 // across RocksDB instances to control concurrent tasks.
 //
 // @param name: Name of the limiter.
@@ -48,4 +43,4 @@ class ConcurrentTaskLimiter {
 extern ConcurrentTaskLimiter* NewConcurrentTaskLimiter(const std::string& name,
                                                        int32_t limit);
 
-}  // namespace ROCKSDB_NAMESPACE
+}  // namespace rocksdb

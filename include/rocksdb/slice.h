@@ -30,7 +30,7 @@
 
 #include "rocksdb/cleanable.h"
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 
 class Slice {
  public:
@@ -147,12 +147,8 @@ class PinnableSlice : public Slice, public Cleanable {
   PinnableSlice() { buf_ = &self_space_; }
   explicit PinnableSlice(std::string* buf) { buf_ = buf; }
 
-  PinnableSlice(PinnableSlice&& other);
-  PinnableSlice& operator=(PinnableSlice&& other);
-
   // No copy constructor and copy assignment allowed.
   PinnableSlice(PinnableSlice&) = delete;
-  PinnableSlice(const PinnableSlice&) = delete;
   PinnableSlice& operator=(PinnableSlice&) = delete;
 
   inline void PinSlice(const Slice& s, CleanupFunction f, void* arg1,
@@ -199,15 +195,8 @@ class PinnableSlice : public Slice, public Cleanable {
     }
   }
 
-  void remove_prefix(size_t n) {
-    assert(n <= size());
-    if (pinned_) {
-      data_ += n;
-      size_ -= n;
-    } else {
-      buf_->erase(0, n);
-      PinSelf();
-    }
+  void remove_prefix(size_t /*n*/) {
+    assert(0);  // Not implemented
   }
 
   void Reset() {
@@ -218,7 +207,7 @@ class PinnableSlice : public Slice, public Cleanable {
 
   inline std::string* GetSelf() { return buf_; }
 
-  inline bool IsPinned() const { return pinned_; }
+  inline bool IsPinned() { return pinned_; }
 
  private:
   friend class PinnableSlice4Test;
@@ -267,4 +256,4 @@ inline size_t Slice::difference_offset(const Slice& b) const {
   return off;
 }
 
-}  // namespace ROCKSDB_NAMESPACE
+}  // namespace rocksdb

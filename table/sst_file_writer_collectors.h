@@ -5,13 +5,12 @@
 
 #pragma once
 #include <string>
-
+#include "db/dbformat.h"
 #include "db/table_properties_collector.h"
 #include "rocksdb/types.h"
-#include "util/coding.h"
 #include "util/string_util.h"
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 
 // Table Properties that are specific to tables created by SstFileWriter.
 struct ExternalSstFilePropertyNames {
@@ -36,9 +35,9 @@ class SstFileWriterPropertiesCollector : public IntTblPropCollector {
     return Status::OK();
   }
 
-  virtual void BlockAdd(uint64_t /* block_raw_bytes */,
-                        uint64_t /* block_compressed_bytes_fast */,
-                        uint64_t /* block_compressed_bytes_slow */) override {
+  virtual void BlockAdd(uint64_t /* blockRawBytes */,
+                        uint64_t /* blockCompressedBytesFast */,
+                        uint64_t /* blockCompressedBytesSlow */) override {
     // Intentionally left blank. No interest in collecting stats for
     // blocks.
     return;
@@ -79,7 +78,7 @@ class SstFileWriterPropertiesCollectorFactory
       : version_(version), global_seqno_(global_seqno) {}
 
   virtual IntTblPropCollector* CreateIntTblPropCollector(
-      uint32_t /*column_family_id*/, int /* level_at_creation */) override {
+      uint32_t /*column_family_id*/) override {
     return new SstFileWriterPropertiesCollector(version_, global_seqno_);
   }
 
@@ -92,4 +91,4 @@ class SstFileWriterPropertiesCollectorFactory
   SequenceNumber global_seqno_;
 };
 
-}  // namespace ROCKSDB_NAMESPACE
+}  // namespace rocksdb

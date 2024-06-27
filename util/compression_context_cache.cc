@@ -14,7 +14,7 @@
 
 #include <atomic>
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 namespace compression_cache {
 
 void* const SentinelValue = nullptr;
@@ -65,6 +65,8 @@ static_assert(sizeof(ZSTDCachedData) % CACHE_LINE_SIZE == 0,
               "Expected CACHE_LINE_SIZE alignment");
 }  // namespace compression_cache
 
+using namespace compression_cache;
+
 class CompressionContextCache::Rep {
  public:
   Rep() {}
@@ -80,7 +82,7 @@ class CompressionContextCache::Rep {
   }
 
  private:
-  CoreLocalArray<compression_cache::ZSTDCachedData> per_core_uncompr_;
+  CoreLocalArray<ZSTDCachedData> per_core_uncompr_;
 };
 
 CompressionContextCache::CompressionContextCache() : rep_(new Rep()) {}
@@ -103,4 +105,4 @@ void CompressionContextCache::ReturnCachedZSTDUncompressData(int64_t idx) {
 
 CompressionContextCache::~CompressionContextCache() { delete rep_; }
 
-}  // namespace ROCKSDB_NAMESPACE
+}  // namespace rocksdb

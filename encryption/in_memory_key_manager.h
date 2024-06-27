@@ -11,7 +11,7 @@
 #include "test_util/testutil.h"
 #include "util/mutexlock.h"
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 namespace encryption {
 
 // KeyManager store metadata in memory. It is used in tests and db_bench only.
@@ -20,7 +20,8 @@ class InMemoryKeyManager final : public KeyManager {
   InMemoryKeyManager(EncryptionMethod method)
       : rnd_(42),
         method_(method),
-        key_(rnd_.HumanReadableString(static_cast<int>(KeySize(method)))) {
+        key_(test::RandomHumanReadableString(&rnd_,
+                                       static_cast<int>(KeySize(method)))) {
     assert(method != EncryptionMethod::kUnknown);
   }
 
@@ -43,7 +44,7 @@ class InMemoryKeyManager final : public KeyManager {
                  FileEncryptionInfo* file_info) override {
     assert(file_info != nullptr);
     MutexLock l(&mu_);
-    std::string iv = rnd_.HumanReadableString(AES_BLOCK_SIZE);
+    std::string iv = test::RandomHumanReadableString(&rnd_, AES_BLOCK_SIZE);
     files_[fname] = iv;
     file_info->method = method_;
     file_info->key = key_;
@@ -70,6 +71,17 @@ class InMemoryKeyManager final : public KeyManager {
     return Status::OK();
   }
 
+  Status RenameFile(const std::string& src_fname,
+                    const std::string& dst_fname) override {
+    MutexLock l(&mu_);
+    if (files_.count(src_fname) == 0) {
+      return Status::Corruption("File not found: " + src_fname);
+    }
+    files_[dst_fname] = files_[src_fname];
+    files_.erase(src_fname);
+    return Status::OK();
+  }
+
  private:
   mutable port::Mutex mu_;
   Random rnd_;
@@ -79,7 +91,7 @@ class InMemoryKeyManager final : public KeyManager {
 };
 
 }  // namespace encryption
-}  // namespace ROCKSDB_NAMESPACE
+}  // namespace rocksdb
 
 #endif  // OPENSSL
 #endif  // !ROCKSDB_LITE

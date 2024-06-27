@@ -7,9 +7,9 @@
 
 #include "monitoring/thread_status_updater.h"
 #include "monitoring/thread_status_util.h"
-#include "rocksdb/system_clock.h"
+#include "rocksdb/env.h"
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 
 #ifndef NDEBUG
 // the delay for debugging purpose.
@@ -23,10 +23,10 @@ void ThreadStatusUtil::TEST_SetStateDelay(
 void ThreadStatusUtil::TEST_StateDelay(const ThreadStatus::StateType state) {
   auto delay = states_delay[state].load(std::memory_order_relaxed);
   if (delay > 0) {
-    SystemClock::Default()->SleepForMicroseconds(delay);
+    Env::Default()->SleepForMicroseconds(delay);
   }
 }
 
 #endif  // !NDEBUG
 
-}  // namespace ROCKSDB_NAMESPACE
+}  // namespace rocksdb

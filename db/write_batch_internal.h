@@ -8,25 +8,20 @@
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
 #pragma once
-#include <array>
 #include <vector>
-
-#include "db/flush_scheduler.h"
-#include "db/kv_checksum.h"
-#include "db/trim_history_scheduler.h"
 #include "db/write_thread.h"
-#include "rocksdb/db.h"
-#include "rocksdb/options.h"
 #include "rocksdb/types.h"
 #include "rocksdb/write_batch.h"
+#include "rocksdb/db.h"
+#include "rocksdb/options.h"
 #include "util/autovector.h"
-#include "util/cast_util.h"
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 
 class MemTable;
 class FlushScheduler;
 class ColumnFamilyData;
+class ColumnFamilySet;
 
 class ColumnFamilyMemTables {
  public:
@@ -65,21 +60,13 @@ class ColumnFamilyMemTablesDefault : public ColumnFamilyMemTables {
   MemTable* mem_;
 };
 
-struct WriteBatch::ProtectionInfo {
-  // `WriteBatch` usually doesn't contain a huge number of keys so protecting
-  // with a fixed, non-configurable eight bytes per key may work well enough.
-  autovector<ProtectionInfoKVOC64> entries_;
-
-  size_t GetBytesPerKey() const { return 8; }
-};
-
 // WriteBatchInternal provides static methods for manipulating a
 // WriteBatch that we don't want in the public WriteBatch interface.
 class WriteBatchInternal {
  public:
 
   // WriteBatch header has an 8-byte sequence number followed by a 4-byte count.
-  static constexpr size_t kHeader = 12;
+  static const size_t kHeader = 12;
 
   // WriteBatch methods with column_family_id instead of ColumnFamilyHandle*
   static Status Put(WriteBatch* batch, uint32_t column_family_id,
@@ -124,18 +111,15 @@ class WriteBatchInternal {
 
   static Status MarkCommit(WriteBatch* batch, const Slice& xid);
 
-  static Status MarkCommitWithTimestamp(WriteBatch* batch, const Slice& xid,
-                                        const Slice& commit_ts);
-
   static Status InsertNoop(WriteBatch* batch);
 
   // Return the number of entries in the batch.
-  static uint32_t Count(const WriteBatch* batch);
+  static int Count(const WriteBatch* batch);
 
-  static uint32_t Count(const std::vector<WriteBatch*> batch);
+  static int Count(const std::vector<WriteBatch*> batch);
 
   // Set the count for the number of entries in the batch.
-  static void SetCount(WriteBatch* batch, uint32_t n);
+  static void SetCount(WriteBatch* batch, int n);
 
   // Return the sequence number for the start of this batch.
   static SequenceNumber Sequence(const WriteBatch* batch);
@@ -189,7 +173,6 @@ class WriteBatchInternal {
   static Status InsertInto(
       WriteThread::WriteGroup& write_group, SequenceNumber sequence,
       ColumnFamilyMemTables* memtables, FlushScheduler* flush_scheduler,
-      TrimHistoryScheduler* trim_history_scheduler,
       bool ignore_missing_column_families = false, uint64_t log_number = 0,
       DB* db = nullptr, bool concurrent_memtable_writes = false,
       bool seq_per_batch = false, bool batch_per_txn = true);
@@ -199,48 +182,38 @@ class WriteBatchInternal {
   static Status InsertInto(
       const WriteBatch* batch, ColumnFamilyMemTables* memtables,
       FlushScheduler* flush_scheduler,
-      TrimHistoryScheduler* trim_history_scheduler,
       bool ignore_missing_column_families = false, uint64_t log_number = 0,
-      uint64_t log_ref = 0, DB* db = nullptr,
-      bool concurrent_memtable_writes = false,
+      DB* db = nullptr, bool concurrent_memtable_writes = false,
       SequenceNumber* next_seq = nullptr, bool* has_valid_writes = nullptr,
       bool seq_per_batch = false, bool batch_per_txn = true);
 
   static Status InsertInto(WriteThread::Writer* writer, SequenceNumber sequence,
                            ColumnFamilyMemTables* memtables,
                            FlushScheduler* flush_scheduler,
-                           TrimHistoryScheduler* trim_history_scheduler,
                            bool ignore_missing_column_families = false,
                            uint64_t log_number = 0, DB* db = nullptr,
                            bool concurrent_memtable_writes = false,
                            bool seq_per_batch = false, size_t batch_cnt = 0,
-                           bool batch_per_txn = true,
-                           bool hint_per_batch = false);
+                           bool batch_per_txn = true);
+
+  static void AsyncInsertInto(WriteThread::Writer* writer,
+                              SequenceNumber sequence,
+                              ColumnFamilySet* version_set,
+                              FlushScheduler* flush_scheduler,
+                              bool ignore_missing_column_families, DB* db,
+                              SafeFuncQueue* pool);
 
   static Status Append(WriteBatch* dst, const WriteBatch* src,
                        const bool WAL_only = false);
-
-  static Status AppendContents(WriteBatch* dst, const Slice& content);
 
   // Returns the byte size of appending a WriteBatch with ByteSize
   // leftByteSize and a WriteBatch with ByteSize rightByteSize
   static size_t AppendedByteSize(size_t leftByteSize, size_t rightByteSize);
 
-  // Iterate over [begin, end) range of a write batch
-  static Status Iterate(const WriteBatch* wb, WriteBatch::Handler* handler,
-                        size_t begin, size_t end);
-
   // This write batch includes the latest state that should be persisted. Such
   // state meant to be used only during recovery.
-  static void SetAsLatestPersistentState(WriteBatch* b);
+  static void SetAsLastestPersistentState(WriteBatch* b);
   static bool IsLatestPersistentState(const WriteBatch* b);
-
-  static std::tuple<Status, uint32_t, size_t> GetColumnFamilyIdAndTimestampSize(
-      WriteBatch* b, ColumnFamilyHandle* column_family);
-
-  static bool TimestampsUpdateNeeded(const WriteBatch& wb) {
-    return wb.needs_in_place_update_ts_;
-  }
 };
 
 // LocalSavePoint is similar to a scope guard
@@ -267,9 +240,6 @@ class LocalSavePoint {
     if (batch_->max_bytes_ && batch_->rep_.size() > batch_->max_bytes_) {
       batch_->rep_.resize(savepoint_.size);
       WriteBatchInternal::SetCount(batch_, savepoint_.count);
-      if (batch_->prot_info_ != nullptr) {
-        batch_->prot_info_->entries_.resize(savepoint_.count);
-      }
       batch_->content_flags_.store(savepoint_.content_flags,
                                    std::memory_order_relaxed);
       return Status::MemoryLimit();
@@ -285,108 +255,4 @@ class LocalSavePoint {
 #endif
 };
 
-template <typename TimestampSizeFuncType>
-class TimestampUpdater : public WriteBatch::Handler {
- public:
-  explicit TimestampUpdater(WriteBatch::ProtectionInfo* prot_info,
-                            TimestampSizeFuncType&& ts_sz_func, const Slice& ts)
-      : prot_info_(prot_info),
-        ts_sz_func_(std::move(ts_sz_func)),
-        timestamp_(ts) {
-    assert(!timestamp_.empty());
-  }
-
-  ~TimestampUpdater() override {}
-
-  Status PutCF(uint32_t cf, const Slice& key, const Slice&) override {
-    return UpdateTimestamp(cf, key);
-  }
-
-  Status DeleteCF(uint32_t cf, const Slice& key) override {
-    return UpdateTimestamp(cf, key);
-  }
-
-  Status SingleDeleteCF(uint32_t cf, const Slice& key) override {
-    return UpdateTimestamp(cf, key);
-  }
-
-  Status DeleteRangeCF(uint32_t cf, const Slice& begin_key,
-                       const Slice&) override {
-    return UpdateTimestamp(cf, begin_key);
-  }
-
-  Status MergeCF(uint32_t cf, const Slice& key, const Slice&) override {
-    return UpdateTimestamp(cf, key);
-  }
-
-  Status PutBlobIndexCF(uint32_t cf, const Slice& key, const Slice&) override {
-    return UpdateTimestamp(cf, key);
-  }
-
-  Status MarkBeginPrepare(bool) override { return Status::OK(); }
-
-  Status MarkEndPrepare(const Slice&) override { return Status::OK(); }
-
-  Status MarkCommit(const Slice&) override { return Status::OK(); }
-
-  Status MarkCommitWithTimestamp(const Slice&, const Slice&) override {
-    return Status::OK();
-  }
-
-  Status MarkRollback(const Slice&) override { return Status::OK(); }
-
-  Status MarkNoop(bool /*empty_batch*/) override { return Status::OK(); }
-
- private:
-  Status UpdateTimestamp(uint32_t cf, const Slice& key) {
-    Status s = UpdateTimestampImpl(cf, key, idx_);
-    ++idx_;
-    return s;
-  }
-
-  Status UpdateTimestampImpl(uint32_t cf, const Slice& key, size_t /*idx*/) {
-    if (timestamp_.empty()) {
-      return Status::InvalidArgument("Timestamp is empty");
-    }
-    size_t cf_ts_sz = ts_sz_func_(cf);
-    if (0 == cf_ts_sz) {
-      // Skip this column family.
-      return Status::OK();
-    } else if (std::numeric_limits<size_t>::max() == cf_ts_sz) {
-      // Column family timestamp info not found.
-      return Status::NotFound();
-    } else if (cf_ts_sz != timestamp_.size()) {
-      return Status::InvalidArgument("timestamp size mismatch");
-    }
-    UpdateProtectionInformationIfNeeded(key, timestamp_);
-
-    char* ptr = const_cast<char*>(key.data() + key.size() - cf_ts_sz);
-    assert(ptr);
-    memcpy(ptr, timestamp_.data(), timestamp_.size());
-    return Status::OK();
-  }
-
-  void UpdateProtectionInformationIfNeeded(const Slice& key, const Slice& ts) {
-    if (prot_info_ != nullptr) {
-      const size_t ts_sz = ts.size();
-      SliceParts old_key(&key, 1);
-      Slice key_no_ts(key.data(), key.size() - ts_sz);
-      std::array<Slice, 2> new_key_cmpts{{key_no_ts, ts}};
-      SliceParts new_key(new_key_cmpts.data(), 2);
-      prot_info_->entries_[idx_].UpdateK(old_key, new_key);
-    }
-  }
-
-  // No copy or move.
-  TimestampUpdater(const TimestampUpdater&) = delete;
-  TimestampUpdater(TimestampUpdater&&) = delete;
-  TimestampUpdater& operator=(const TimestampUpdater&) = delete;
-  TimestampUpdater& operator=(TimestampUpdater&&) = delete;
-
-  WriteBatch::ProtectionInfo* const prot_info_ = nullptr;
-  const TimestampSizeFuncType ts_sz_func_{};
-  const Slice timestamp_;
-  size_t idx_ = 0;
-};
-
-}  // namespace ROCKSDB_NAMESPACE
+}  // namespace rocksdb

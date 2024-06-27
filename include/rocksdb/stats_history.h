@@ -14,7 +14,7 @@
 #include "rocksdb/statistics.h"
 #include "rocksdb/status.h"
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 
 class DBImpl;
 
@@ -53,7 +53,6 @@ class StatsHistoryIterator {
   // REQUIRES: Valid()
   virtual uint64_t GetStatsTime() const = 0;
 
-  // DEPRECATED (was never used)
   virtual int GetFormatVersion() const { return -1; }
 
   // Return the current stats history as an std::map which specifies the
@@ -67,4 +66,4 @@ class StatsHistoryIterator {
   virtual Status status() const = 0;
 };
 
-}  // namespace ROCKSDB_NAMESPACE
+}  // namespace rocksdb

@@ -9,17 +9,16 @@
 #include <stdint.h>
 #include <string>
 #include <vector>
-#include "db/version_edit.h"
 #include "rocksdb/options.h"
 #include "rocksdb/status.h"
 #include "rocksdb/table.h"
 #include "rocksdb/table_properties.h"
-#include "table/plain/plain_table_bloom.h"
+#include "table/bloom_block.h"
 #include "table/plain/plain_table_index.h"
 #include "table/plain/plain_table_key_coding.h"
 #include "table/table_builder.h"
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 
 class BlockBuilder;
 class BlockHandle;
@@ -37,19 +36,15 @@ class PlainTableBuilder: public TableBuilder {
   // will be part of level specified by 'level'.  A value of -1 means
   // that the caller does not know which level the output file will reside.
   PlainTableBuilder(
-      const ImmutableOptions& ioptions, const MutableCFOptions& moptions,
-      const IntTblPropCollectorFactories* int_tbl_prop_collector_factories,
-      uint32_t column_family_id, int level_at_creation,
-      WritableFileWriter* file, uint32_t user_key_size,
-      EncodingType encoding_type, size_t index_sparseness,
-      uint32_t bloom_bits_per_key, const std::string& column_family_name,
-      uint32_t num_probes = 6, size_t huge_page_tlb_size = 0,
-      double hash_table_ratio = 0, bool store_index_in_file = false,
-      const std::string& db_id = "", const std::string& db_session_id = "",
-      uint64_t file_number = 0);
-  // No copying allowed
-  PlainTableBuilder(const PlainTableBuilder&) = delete;
-  void operator=(const PlainTableBuilder&) = delete;
+      const ImmutableCFOptions& ioptions, const MutableCFOptions& moptions,
+      const std::vector<std::unique_ptr<IntTblPropCollectorFactory>>*
+          int_tbl_prop_collector_factories,
+      uint32_t column_family_id, WritableFileWriter* file,
+      uint32_t user_key_size, EncodingType encoding_type,
+      size_t index_sparseness, uint32_t bloom_bits_per_key,
+      const std::string& column_family_name, uint32_t num_probes = 6,
+      size_t huge_page_tlb_size = 0, double hash_table_ratio = 0,
+      bool store_index_in_file = false);
 
   // REQUIRES: Either Finish() or Abandon() has been called.
   ~PlainTableBuilder();
@@ -60,10 +55,7 @@ class PlainTableBuilder: public TableBuilder {
   void Add(const Slice& key, const Slice& value) override;
 
   // Return non-ok iff some error has been detected.
-  Status status() const override { return status_; }
-
-  // Return non-ok iff some error happens during IO.
-  IOStatus io_status() const override { return io_status_; }
+  Status status() const override;
 
   // Finish building the table.  Stops using the file passed to the
   // constructor after this function returns.
@@ -88,15 +80,9 @@ class PlainTableBuilder: public TableBuilder {
 
   bool SaveIndexInFile() const { return store_index_in_file_; }
 
-  // Get file checksum
-  std::string GetFileChecksum() const override;
-
-  // Get file checksum function name
-  const char* GetFileChecksumFuncName() const override;
-
  private:
   Arena arena_;
-  const ImmutableOptions& ioptions_;
+  const ImmutableCFOptions& ioptions_;
   const MutableCFOptions& moptions_;
   std::vector<std::unique_ptr<IntTblPropCollector>>
       table_properties_collectors_;
@@ -109,7 +95,6 @@ class PlainTableBuilder: public TableBuilder {
   uint32_t bloom_bits_per_key_;
   size_t huge_page_tlb_size_;
   Status status_;
-  IOStatus io_status_;
   TableProperties properties_;
   PlainTableKeyEncoder encoder_;
 
@@ -146,8 +131,12 @@ class PlainTableBuilder: public TableBuilder {
   }
 
   bool IsTotalOrderMode() const { return (prefix_extractor_ == nullptr); }
+
+  // No copying allowed
+  PlainTableBuilder(const PlainTableBuilder&) = delete;
+  void operator=(const PlainTableBuilder&) = delete;
 };
 
-}  // namespace ROCKSDB_NAMESPACE
+}  // namespace rocksdb
 
 #endif  // ROCKSDB_LITE

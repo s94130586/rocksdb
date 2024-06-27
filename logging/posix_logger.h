@@ -29,7 +29,7 @@
 #include "rocksdb/env.h"
 #include "test_util/sync_point.h"
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 
 class PosixLogger : public Logger {
  private:
@@ -68,7 +68,7 @@ class PosixLogger : public Logger {
   virtual ~PosixLogger() {
     if (!closed_) {
       closed_ = true;
-      PosixCloseHelper().PermitUncheckedError();
+      PosixCloseHelper();
     }
   }
   virtual void Flush() override {
@@ -108,9 +108,15 @@ class PosixLogger : public Logger {
       const time_t seconds = now_tv.tv_sec;
       struct tm t;
       localtime_r(&seconds, &t);
-      p += snprintf(p, limit - p, "%04d/%02d/%02d-%02d:%02d:%02d.%06d %llu ",
-                    t.tm_year + 1900, t.tm_mon + 1, t.tm_mday, t.tm_hour,
-                    t.tm_min, t.tm_sec, static_cast<int>(now_tv.tv_usec),
+      p += snprintf(p, limit - p,
+                    "%04d/%02d/%02d-%02d:%02d:%02d.%06d %llx ",
+                    t.tm_year + 1900,
+                    t.tm_mon + 1,
+                    t.tm_mday,
+                    t.tm_hour,
+                    t.tm_min,
+                    t.tm_sec,
+                    static_cast<int>(now_tv.tv_usec),
                     static_cast<long long unsigned int>(thread_id));
 
       // Print the message
@@ -176,4 +182,4 @@ class PosixLogger : public Logger {
   size_t GetLogFileSize() const override { return log_size_; }
 };
 
-}  // namespace ROCKSDB_NAMESPACE
+}  // namespace rocksdb

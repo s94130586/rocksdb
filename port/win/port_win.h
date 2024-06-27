@@ -16,16 +16,18 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 
+// Assume that for everywhere
+#undef PLATFORM_IS_LITTLE_ENDIAN
+#define PLATFORM_IS_LITTLE_ENDIAN true
+
 #include <windows.h>
 #include <string>
-#include <thread>
 #include <string.h>
 #include <mutex>
 #include <limits>
 #include <condition_variable>
 #include <malloc.h>
 #include <intrin.h>
-#include <process.h>
 
 #include <stdint.h>
 
@@ -47,7 +49,7 @@
 #undef DeleteFile
 
 #ifndef _SSIZE_T_DEFINED
-using ssize_t = SSIZE_T;
+typedef SSIZE_T ssize_t;
 #endif
 
 // size_t printf formatting named in the manner of C99 standard formatting
@@ -68,7 +70,11 @@ using ssize_t = SSIZE_T;
 
 #endif
 
-namespace ROCKSDB_NAMESPACE {
+#ifndef PLATFORM_IS_LITTLE_ENDIAN
+#define PLATFORM_IS_LITTLE_ENDIAN (__BYTE_ORDER == __LITTLE_ENDIAN)
+#endif
+
+namespace rocksdb {
 
 #define PREFETCH(addr, rw, locality)
 
@@ -116,10 +122,7 @@ const size_t kMaxSizet = std::numeric_limits<size_t>::max();
 
 #endif //_MSC_VER
 
-// "Windows is designed to run on little-endian computer architectures."
-// https://docs.microsoft.com/en-us/windows/win32/sysinfo/registry-value-types
-constexpr bool kLittleEndian = true;
-#undef PLATFORM_IS_LITTLE_ENDIAN
+const bool kLittleEndian = true;
 
 class CondVar;
 
@@ -146,16 +149,6 @@ class Mutex {
     locked_ = false;
 #endif
     mutex_.unlock();
-  }
-
-  bool TryLock() {
-    bool ret = mutex_.try_lock();
-#ifndef NDEBUG
-    if (ret) {
-      locked_ = true;
-    }
-#endif
-    return ret;
   }
 
   // this will assert if the mutex is not locked
@@ -187,9 +180,6 @@ class Mutex {
 class RWMutex {
  public:
   RWMutex() { InitializeSRWLock(&srwLock_); }
-  // No copying allowed
-  RWMutex(const RWMutex&) = delete;
-  void operator=(const RWMutex&) = delete;
 
   void ReadLock() { AcquireSRWLockShared(&srwLock_); }
 
@@ -204,6 +194,9 @@ class RWMutex {
 
  private:
   SRWLOCK srwLock_;
+  // No copying allowed
+  RWMutex(const RWMutex&);
+  void operator=(const RWMutex&);
 };
 
 class CondVar {
@@ -229,14 +222,9 @@ class CondVar {
   Mutex* mu_;
 };
 
-
-#ifdef _POSIX_THREADS
-using Thread = std::thread;
-#else
 // Wrapper around the platform efficient
 // or otherwise preferrable implementation
 using Thread = WindowsThread;
-#endif
 
 // OnceInit type helps emulate
 // Posix semantics with initialization
@@ -282,8 +270,6 @@ inline void cacheline_aligned_free(void *memblock) {
 #endif
 }
 
-extern const size_t kPageSize;
-
 // https://gcc.gnu.org/bugzilla/show_bug.cgi?id=52991 for MINGW32
 // could not be worked around with by -mno-ms-bitfields
 #ifndef __MINGW32__
@@ -293,7 +279,7 @@ extern const size_t kPageSize;
 #endif
 
 static inline void AsmVolatilePause() {
-#if defined(_M_IX86) || defined(_M_X64) || defined(_M_ARM64) || defined(_M_ARM)
+#if defined(_M_IX86) || defined(_M_X64)
   YieldProcessor();
 #endif
   // it would be nice to get "wfe" on ARM here
@@ -302,7 +288,7 @@ static inline void AsmVolatilePause() {
 extern int PhysicalCoreID();
 
 // For Thread Local Storage abstraction
-using pthread_key_t = DWORD;
+typedef DWORD pthread_key_t;
 
 inline int pthread_key_create(pthread_key_t* key, void (*destructor)(void*)) {
   // Not used
@@ -353,25 +339,14 @@ extern int GetMaxOpenFiles();
 std::string utf16_to_utf8(const std::wstring& utf16);
 std::wstring utf8_to_utf16(const std::string& utf8);
 
-using ThreadId = int;
-
-extern void SetCpuPriority(ThreadId id, CpuPriority priority);
-
-int64_t GetProcessID();
-
-// Uses platform APIs to generate a 36-character RFC-4122 UUID. Returns
-// true on success or false on failure.
-bool GenerateRfcUuid(std::string* output);
-
 }  // namespace port
 
 
 #ifdef ROCKSDB_WINDOWS_UTF8_FILENAMES
 
 #define RX_FILESTRING std::wstring
-#define RX_FN(a) ROCKSDB_NAMESPACE::port::utf8_to_utf16(a)
-#define FN_TO_RX(a) ROCKSDB_NAMESPACE::port::utf16_to_utf8(a)
-#define RX_FNCMP(a, b) ::wcscmp(a, RX_FN(b).c_str())
+#define RX_FN(a) rocksdb::port::utf8_to_utf16(a)
+#define FN_TO_RX(a) rocksdb::port::utf16_to_utf8(a)
 #define RX_FNLEN(a) ::wcslen(a)
 
 #define RX_DeleteFile DeleteFileW
@@ -388,15 +363,12 @@ bool GenerateRfcUuid(std::string* output);
 #define RX_CreateHardLink CreateHardLinkW
 #define RX_PathIsRelative PathIsRelativeW
 #define RX_GetCurrentDirectory GetCurrentDirectoryW
-#define RX_GetDiskFreeSpaceEx GetDiskFreeSpaceExW
-#define RX_PathIsDirectory PathIsDirectoryW
 
 #else
 
 #define RX_FILESTRING std::string
 #define RX_FN(a) a
 #define FN_TO_RX(a) a
-#define RX_FNCMP(a, b) strcmp(a, b)
 #define RX_FNLEN(a) strlen(a)
 
 #define RX_DeleteFile DeleteFileA
@@ -406,7 +378,7 @@ bool GenerateRfcUuid(std::string* output);
 #define RX_FindFirstFileEx FindFirstFileExA
 #define RX_CreateDirectory CreateDirectoryA
 #define RX_FindNextFile FindNextFileA
-#define RX_WIN32_FIND_DATA WIN32_FIND_DATAA
+#define RX_WIN32_FIND_DATA WIN32_FIND_DATA
 #define RX_CreateDirectory CreateDirectoryA
 #define RX_RemoveDirectory RemoveDirectoryA
 #define RX_GetFileAttributesEx GetFileAttributesExA
@@ -414,8 +386,6 @@ bool GenerateRfcUuid(std::string* output);
 #define RX_CreateHardLink CreateHardLinkA
 #define RX_PathIsRelative PathIsRelativeA
 #define RX_GetCurrentDirectory GetCurrentDirectoryA
-#define RX_GetDiskFreeSpaceEx GetDiskFreeSpaceExA
-#define RX_PathIsDirectory PathIsDirectoryA
 
 #endif
 
@@ -426,4 +396,4 @@ using port::pthread_setspecific;
 using port::pthread_getspecific;
 using port::truncate;
 
-}  // namespace ROCKSDB_NAMESPACE
+}  // namespace rocksdb

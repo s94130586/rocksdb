@@ -3,11 +3,9 @@
 //  COPYING file in the root directory) and Apache 2.0 License
 //  (found in the LICENSE.Apache file in the root directory).
 
-#include "util/thread_local.h"
-
+#include <thread>
 #include <atomic>
 #include <string>
-#include <thread>
 
 #include "port/port.h"
 #include "rocksdb/env.h"
@@ -15,8 +13,9 @@
 #include "test_util/testharness.h"
 #include "test_util/testutil.h"
 #include "util/autovector.h"
+#include "util/thread_local.h"
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 
 class ThreadLocalTest : public testing::Test {
  public:
@@ -52,8 +51,10 @@ struct Params {
 };
 
 class IDChecker : public ThreadLocalPtr {
- public:
-  static uint32_t PeekId() { return TEST_PeekId(); }
+public:
+  static uint32_t PeekId() {
+    return TEST_PeekId();
+  }
 };
 
 }  // anonymous namespace
@@ -64,45 +65,45 @@ TEST_F(ThreadLocalTest, UniqueIdTest) {
   port::Mutex mu;
   port::CondVar cv(&mu);
 
-  uint32_t base_id = IDChecker::PeekId();
+  ASSERT_EQ(IDChecker::PeekId(), 0u);
   // New ThreadLocal instance bumps id by 1
   {
     // Id used 0
     Params p1(&mu, &cv, nullptr, 1u);
-    ASSERT_EQ(IDChecker::PeekId(), base_id + 1u);
+    ASSERT_EQ(IDChecker::PeekId(), 1u);
     // Id used 1
     Params p2(&mu, &cv, nullptr, 1u);
-    ASSERT_EQ(IDChecker::PeekId(), base_id + 2u);
+    ASSERT_EQ(IDChecker::PeekId(), 2u);
     // Id used 2
     Params p3(&mu, &cv, nullptr, 1u);
-    ASSERT_EQ(IDChecker::PeekId(), base_id + 3u);
+    ASSERT_EQ(IDChecker::PeekId(), 3u);
     // Id used 3
     Params p4(&mu, &cv, nullptr, 1u);
-    ASSERT_EQ(IDChecker::PeekId(), base_id + 4u);
+    ASSERT_EQ(IDChecker::PeekId(), 4u);
   }
   // id 3, 2, 1, 0 are in the free queue in order
-  ASSERT_EQ(IDChecker::PeekId(), base_id + 0u);
+  ASSERT_EQ(IDChecker::PeekId(), 0u);
 
   // pick up 0
   Params p1(&mu, &cv, nullptr, 1u);
-  ASSERT_EQ(IDChecker::PeekId(), base_id + 1u);
+  ASSERT_EQ(IDChecker::PeekId(), 1u);
   // pick up 1
   Params* p2 = new Params(&mu, &cv, nullptr, 1u);
-  ASSERT_EQ(IDChecker::PeekId(), base_id + 2u);
+  ASSERT_EQ(IDChecker::PeekId(), 2u);
   // pick up 2
   Params p3(&mu, &cv, nullptr, 1u);
-  ASSERT_EQ(IDChecker::PeekId(), base_id + 3u);
+  ASSERT_EQ(IDChecker::PeekId(), 3u);
   // return up 1
   delete p2;
-  ASSERT_EQ(IDChecker::PeekId(), base_id + 1u);
+  ASSERT_EQ(IDChecker::PeekId(), 1u);
   // Now we have 3, 1 in queue
   // pick up 1
   Params p4(&mu, &cv, nullptr, 1u);
-  ASSERT_EQ(IDChecker::PeekId(), base_id + 3u);
+  ASSERT_EQ(IDChecker::PeekId(), 3u);
   // pick up 3
   Params p5(&mu, &cv, nullptr, 1u);
   // next new id
-  ASSERT_EQ(IDChecker::PeekId(), base_id + 4u);
+  ASSERT_EQ(IDChecker::PeekId(), 4u);
   // After exit, id sequence in queue:
   // 3, 1, 2, 0
 }
@@ -110,7 +111,7 @@ TEST_F(ThreadLocalTest, UniqueIdTest) {
 
 TEST_F(ThreadLocalTest, SequentialReadWriteTest) {
   // global id list carries over 3, 1, 2, 0
-  uint32_t base_id = IDChecker::PeekId();
+  ASSERT_EQ(IDChecker::PeekId(), 0u);
 
   port::Mutex mu;
   port::CondVar cv(&mu);
@@ -118,11 +119,9 @@ TEST_F(ThreadLocalTest, SequentialReadWriteTest) {
   ThreadLocalPtr tls2;
   p.tls2 = &tls2;
 
-  ASSERT_GT(IDChecker::PeekId(), base_id);
-  base_id = IDChecker::PeekId();
+  auto func = [](void* ptr) {
+    auto& params = *static_cast<Params*>(ptr);
 
-  auto func = [](Params* ptr) {
-    Params& params = *ptr;
     ASSERT_TRUE(params.tls1.Get() == nullptr);
     params.tls1.Reset(reinterpret_cast<int*>(1));
     ASSERT_TRUE(params.tls1.Get() == reinterpret_cast<int*>(1));
@@ -142,22 +141,21 @@ TEST_F(ThreadLocalTest, SequentialReadWriteTest) {
   };
 
   for (int iter = 0; iter < 1024; ++iter) {
-    ASSERT_EQ(IDChecker::PeekId(), base_id);
+    ASSERT_EQ(IDChecker::PeekId(), 1u);
     // Another new thread, read/write should not see value from previous thread
-    env_->StartThreadTyped(func, &p);
-
+    env_->StartThread(func, static_cast<void*>(&p));
     mu.Lock();
     while (p.completed != iter + 1) {
       cv.Wait();
     }
     mu.Unlock();
-    ASSERT_EQ(IDChecker::PeekId(), base_id);
+    ASSERT_EQ(IDChecker::PeekId(), 1u);
   }
 }
 
 TEST_F(ThreadLocalTest, ConcurrentReadWriteTest) {
   // global id list carries over 3, 1, 2, 0
-  uint32_t base_id = IDChecker::PeekId();
+  ASSERT_EQ(IDChecker::PeekId(), 0u);
 
   ThreadLocalPtr tls2;
   port::Mutex mu1;
@@ -220,10 +218,10 @@ TEST_F(ThreadLocalTest, ConcurrentReadWriteTest) {
   // Each thread local copy of the value are also different from each
   // other.
   for (int th = 0; th < p1.total; ++th) {
-    env_->StartThreadTyped(func, &p1);
+    env_->StartThread(func, static_cast<void*>(&p1));
   }
   for (int th = 0; th < p2.total; ++th) {
-    env_->StartThreadTyped(func, &p2);
+    env_->StartThread(func, static_cast<void*>(&p2));
   }
 
   mu1.Lock();
@@ -238,10 +236,12 @@ TEST_F(ThreadLocalTest, ConcurrentReadWriteTest) {
   }
   mu2.Unlock();
 
-  ASSERT_EQ(IDChecker::PeekId(), base_id + 3u);
+  ASSERT_EQ(IDChecker::PeekId(), 3u);
 }
 
 TEST_F(ThreadLocalTest, Unref) {
+  ASSERT_EQ(IDChecker::PeekId(), 0u);
+
   auto unref = [](void* ptr) {
     auto& p = *static_cast<Params*>(ptr);
     p.mu->Lock();
@@ -250,8 +250,9 @@ TEST_F(ThreadLocalTest, Unref) {
   };
 
   // Case 0: no unref triggered if ThreadLocalPtr is never accessed
-  auto func0 = [](Params* ptr) {
-    auto& p = *ptr;
+  auto func0 = [](void* ptr) {
+    auto& p = *static_cast<Params*>(ptr);
+
     p.mu->Lock();
     ++(p.started);
     p.cv->SignalAll();
@@ -268,15 +269,15 @@ TEST_F(ThreadLocalTest, Unref) {
     Params p(&mu, &cv, &unref_count, th, unref);
 
     for (int i = 0; i < p.total; ++i) {
-      env_->StartThreadTyped(func0, &p);
+      env_->StartThread(func0, static_cast<void*>(&p));
     }
     env_->WaitForJoin();
     ASSERT_EQ(unref_count, 0);
   }
 
   // Case 1: unref triggered by thread exit
-  auto func1 = [](Params* ptr) {
-    auto& p = *ptr;
+  auto func1 = [](void* ptr) {
+    auto& p = *static_cast<Params*>(ptr);
 
     p.mu->Lock();
     ++(p.started);
@@ -305,7 +306,7 @@ TEST_F(ThreadLocalTest, Unref) {
     p.tls2 = &tls2;
 
     for (int i = 0; i < p.total; ++i) {
-      env_->StartThreadTyped(func1, &p);
+      env_->StartThread(func1, static_cast<void*>(&p));
     }
 
     env_->WaitForJoin();
@@ -315,8 +316,8 @@ TEST_F(ThreadLocalTest, Unref) {
   }
 
   // Case 2: unref triggered by ThreadLocal instance destruction
-  auto func2 = [](Params* ptr) {
-    auto& p = *ptr;
+  auto func2 = [](void* ptr) {
+    auto& p = *static_cast<Params*>(ptr);
 
     p.mu->Lock();
     ++(p.started);
@@ -354,7 +355,7 @@ TEST_F(ThreadLocalTest, Unref) {
     p.tls2 = new ThreadLocalPtr(unref);
 
     for (int i = 0; i < p.total; ++i) {
-      env_->StartThreadTyped(func2, &p);
+      env_->StartThread(func2, static_cast<void*>(&p));
     }
 
     // Wait for all threads to finish using Params
@@ -429,7 +430,7 @@ TEST_F(ThreadLocalTest, Scrape) {
     p.tls2 = new ThreadLocalPtr(unref);
 
     for (int i = 0; i < p.total; ++i) {
-      env_->StartThreadTyped(func, &p);
+      env_->StartThread(func, static_cast<void*>(&p));
     }
 
     // Wait for all threads to finish using Params
@@ -488,7 +489,7 @@ TEST_F(ThreadLocalTest, Fold) {
   };
 
   for (int th = 0; th < params.total; ++th) {
-    env_->StartThread(func, &params);
+    env_->StartThread(func, static_cast<void*>(&params));
   }
 
   // Wait for all threads to finish using Params
@@ -552,7 +553,7 @@ void* AccessThreadLocal(void* /*arg*/) {
 // this test and only see an ASAN error on SyncPoint, it means you pass the
 // test.
 TEST_F(ThreadLocalTest, DISABLED_MainThreadDiesFirst) {
-  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->LoadDependency(
+  rocksdb::SyncPoint::GetInstance()->LoadDependency(
       {{"AccessThreadLocal:Start", "MainThreadDiesFirst:End"},
        {"PosixEnv::~PosixEnv():End", "AccessThreadLocal:End"}});
 
@@ -562,7 +563,7 @@ TEST_F(ThreadLocalTest, DISABLED_MainThreadDiesFirst) {
 #ifndef ROCKSDB_LITE
   try {
 #endif  // ROCKSDB_LITE
-    ROCKSDB_NAMESPACE::port::Thread th(&AccessThreadLocal, nullptr);
+    rocksdb::port::Thread th(&AccessThreadLocal, nullptr);
     th.detach();
     TEST_SYNC_POINT("MainThreadDiesFirst:End");
 #ifndef ROCKSDB_LITE
@@ -573,7 +574,7 @@ TEST_F(ThreadLocalTest, DISABLED_MainThreadDiesFirst) {
 #endif  // ROCKSDB_LITE
 }
 
-}  // namespace ROCKSDB_NAMESPACE
+}  // namespace rocksdb
 
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);

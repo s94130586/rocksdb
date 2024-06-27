@@ -17,19 +17,15 @@
 #include "test_util/sync_point.h"
 #include "util/mutexlock.h"
 
-namespace ROCKSDB_NAMESPACE {
-class FileSystem;
-class SystemClock;
+namespace rocksdb {
 
 #ifndef ROCKSDB_LITE
 // Rolls the log file by size and/or time
 class AutoRollLogger : public Logger {
  public:
-  AutoRollLogger(const std::shared_ptr<FileSystem>& fs,
-                 const std::shared_ptr<SystemClock>& clock,
-                 const std::string& dbname, const std::string& db_log_dir,
-                 size_t log_max_size, size_t log_file_time_to_roll,
-                 size_t keep_log_file_num,
+  AutoRollLogger(Env* env, const std::string& dbname,
+                 const std::string& db_log_dir, size_t log_max_size,
+                 size_t log_file_time_to_roll, size_t keep_log_file_num,
                  const InfoLogLevel log_level = InfoLogLevel::INFO_LEVEL);
 
   using Logger::Logv;
@@ -73,26 +69,7 @@ class AutoRollLogger : public Logger {
 
   virtual ~AutoRollLogger() {
     if (logger_ && !closed_) {
-      logger_->Close().PermitUncheckedError();
-    }
-    status_.PermitUncheckedError();
-  }
-
-  using Logger::GetInfoLogLevel;
-  InfoLogLevel GetInfoLogLevel() const override {
-    MutexLock l(&mutex_);
-    if (!logger_) {
-      return Logger::GetInfoLogLevel();
-    }
-    return logger_->GetInfoLogLevel();
-  }
-
-  using Logger::SetInfoLogLevel;
-  void SetInfoLogLevel(const InfoLogLevel log_level) override {
-    MutexLock lock(&mutex_);
-    Logger::SetInfoLogLevel(log_level);
-    if (logger_) {
-      logger_->SetInfoLogLevel(log_level);
+      logger_->Close();
     }
   }
 
@@ -106,8 +83,6 @@ class AutoRollLogger : public Logger {
   }
 
   uint64_t TEST_ctime() const { return ctime_; }
-
-  Logger* TEST_inner_logger() const { return logger_.get(); }
 
  protected:
   // Implementation of Close()
@@ -138,8 +113,7 @@ class AutoRollLogger : public Logger {
   std::string dbname_;
   std::string db_log_dir_;
   std::string db_absolute_path_;
-  std::shared_ptr<FileSystem> fs_;
-  std::shared_ptr<SystemClock> clock_;
+  Env* env_;
   std::shared_ptr<Logger> logger_;
   // current status of the logger
   Status status_;
@@ -153,13 +127,11 @@ class AutoRollLogger : public Logger {
   // Full path is stored here. It consumes signifianctly more memory
   // than only storing file name. Can optimize if it causes a problem.
   std::queue<std::string> old_log_files_;
-  // to avoid frequent clock->NowMicros() calls, we cached the current time
+  // to avoid frequent env->NowMicros() calls, we cached the current time
   uint64_t cached_now;
   uint64_t ctime_;
   uint64_t cached_now_access_count;
   uint64_t call_NowMicros_every_N_records_;
-  IOOptions io_options_;
-  IODebugContext io_context_;
   mutable port::Mutex mutex_;
 };
 #endif  // !ROCKSDB_LITE
@@ -169,4 +141,4 @@ Status CreateLoggerFromOptions(const std::string& dbname,
                                const DBOptions& options,
                                std::shared_ptr<Logger>* logger);
 
-}  // namespace ROCKSDB_NAMESPACE
+}  // namespace rocksdb

@@ -9,14 +9,14 @@
 
 #pragma once
 
-#include "rocksdb/slice.h"
+#include "db/dbformat.h"
 #include "rocksdb/types.h"
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 
+class Comparator;
+class Env;
 class Arena;
-class InternalKeyComparator;
-
 template <class TValue>
 class InternalIteratorBase;
 using InternalIterator = InternalIteratorBase<Slice>;
@@ -61,4 +61,4 @@ class MergeIteratorBuilder {
   Arena* arena;
 };
 
-}  // namespace ROCKSDB_NAMESPACE
+}  // namespace rocksdb

@@ -2,6 +2,7 @@
 package org.rocksdb;
 
 public interface MutableDBOptionsInterface<T extends MutableDBOptionsInterface<T>> {
+
   /**
    * Specifies the maximum number of concurrent background jobs (both flushes
    * and compactions combined).
@@ -22,12 +23,9 @@ public interface MutableDBOptionsInterface<T extends MutableDBOptionsInterface<T
   int maxBackgroundJobs();
 
   /**
-   * NOT SUPPORTED ANYMORE: RocksDB automatically decides this based on the
-   * value of max_background_jobs. This option is ignored.
-   *
    * Suggested number of concurrent background compaction jobs, submitted to
    * the default LOW priority thread pool.
-   * Default: -1
+   * Default: 1
    *
    * @param baseBackgroundCompactions Suggested number of background compaction
    *     jobs
@@ -38,29 +36,20 @@ public interface MutableDBOptionsInterface<T extends MutableDBOptionsInterface<T
   void setBaseBackgroundCompactions(int baseBackgroundCompactions);
 
   /**
-   * NOT SUPPORTED ANYMORE: RocksDB automatically decides this based on the
-   * value of max_background_jobs. This option is ignored.
-   *
    * Suggested number of concurrent background compaction jobs, submitted to
    * the default LOW priority thread pool.
-   * Default: -1
+   * Default: 1
    *
    * @return Suggested number of background compaction jobs
    */
   int baseBackgroundCompactions();
 
   /**
-   * NOT SUPPORTED ANYMORE: RocksDB automatically decides this based on the
-   * value of max_background_jobs. For backwards compatibility we will set
-   * `max_background_jobs = max_background_compactions + max_background_flushes`
-   * in the case where user sets at least one of `max_background_compactions` or
-   * `max_background_flushes` (we replace -1 by 1 in case one option is unset).
-   *
    * Specifies the maximum number of concurrent background compaction jobs,
    * submitted to the default LOW priority thread pool.
    * If you're increasing this, also consider increasing number of threads in
    * LOW priority thread pool. For more information, see
-   * Default: -1
+   * Default: 1
    *
    * @param maxBackgroundCompactions the maximum number of background
    *     compaction jobs.
@@ -69,23 +58,15 @@ public interface MutableDBOptionsInterface<T extends MutableDBOptionsInterface<T
    * @see RocksEnv#setBackgroundThreads(int)
    * @see RocksEnv#setBackgroundThreads(int, Priority)
    * @see DBOptionsInterface#maxBackgroundFlushes()
-   * @deprecated Use {@link #setMaxBackgroundJobs(int)}
    */
-  @Deprecated
   T setMaxBackgroundCompactions(int maxBackgroundCompactions);
 
   /**
-   * NOT SUPPORTED ANYMORE: RocksDB automatically decides this based on the
-   * value of max_background_jobs. For backwards compatibility we will set
-   * `max_background_jobs = max_background_compactions + max_background_flushes`
-   * in the case where user sets at least one of `max_background_compactions` or
-   * `max_background_flushes` (we replace -1 by 1 in case one option is unset).
-   *
    * Returns the maximum number of concurrent background compaction jobs,
    * submitted to the default LOW priority thread pool.
    * When increasing this number, we may also want to consider increasing
    * number of threads in LOW priority thread pool.
-   * Default: -1
+   * Default: 1
    *
    * @return the maximum number of concurrent background compaction jobs.
    * @see RocksEnv#setBackgroundThreads(int)
@@ -161,16 +142,10 @@ public interface MutableDBOptionsInterface<T extends MutableDBOptionsInterface<T
    * mem tables. It is calculated using size of user write requests before
    * compression. RocksDB may decide to slow down more if the compaction still
    * gets behind further.
-   * If the value is 0, we will infer a value from `rater_limiter` value
-   * if it is not empty, or 16MB if `rater_limiter` is empty. Note that
-   * if users change the rate in `rate_limiter` after DB is opened,
-   * `delayed_write_rate` won't be adjusted.
    *
    * Unit: bytes per second.
    *
-   * Default: 0
-   *
-   * Dynamically changeable through {@link RocksDB#setDBOptions(MutableDBOptions)}.
+   * Default: 16MB/s
    *
    * @param delayedWriteRate the rate in bytes per second
    *
@@ -186,40 +161,22 @@ public interface MutableDBOptionsInterface<T extends MutableDBOptionsInterface<T
    * mem tables. It is calculated using size of user write requests before
    * compression. RocksDB may decide to slow down more if the compaction still
    * gets behind further.
-   * If the value is 0, we will infer a value from `rater_limiter` value
-   * if it is not empty, or 16MB if `rater_limiter` is empty. Note that
-   * if users change the rate in `rate_limiter` after DB is opened,
-   * `delayed_write_rate` won't be adjusted.
    *
    * Unit: bytes per second.
    *
-   * Default: 0
-   *
-   * Dynamically changeable through {@link RocksDB#setDBOptions(MutableDBOptions)}.
+   * Default: 16MB/s
    *
    * @return the rate in bytes per second
    */
   long delayedWriteRate();
 
   /**
-   * <p>Set the max total write-ahead log size. Once write-ahead logs exceed this size, we will
-   * start forcing the flush of column families whose memtables are backed by the oldest live WAL
-   * file
+   * <p>Once write-ahead logs exceed this size, we will start forcing the
+   * flush of column families whose memtables are backed by the oldest live
+   * WAL file (i.e. the ones that are causing all the space amplification).
    * </p>
-   * <p>The oldest WAL files are the ones that are causing all the space amplification.
-   * </p>
-   *  For example, with 15 column families, each with
-   *  <code>write_buffer_size = 128 MB</code>
-   *  <code>max_write_buffer_number = 6</code>
-   *  <code>max_total_wal_size</code> will be calculated to be <code>[15 * 128MB * 6] * 4 =
-   * 45GB</code>
-   * <p>
-   *  The RocksDB wiki has some discussion about how the WAL interacts
-   *  with memtables and flushing of column families, at
-   * <a href="https://github.com/facebook/rocksdb/wiki/Column-Families">...</a>
-   *  </p>
    * <p>If set to 0 (default), we will dynamically choose the WAL size limit to
-   * be [sum of all write_buffer_size * max_write_buffer_number] * 4</p>
+   * be [sum of all write_buffer_size * max_write_buffer_number] * 2</p>
    * <p>This option takes effect only when there are more than one column family as
    * otherwise the wal size is dictated by the write_buffer_size.</p>
    * <p>Default: 0</p>
@@ -230,30 +187,13 @@ public interface MutableDBOptionsInterface<T extends MutableDBOptionsInterface<T
   T setMaxTotalWalSize(long maxTotalWalSize);
 
   /**
-   * <p>Returns the max total write-ahead log size. Once write-ahead logs exceed this size,
+   * <p>Returns the max total wal size. Once write-ahead logs exceed this size,
    * we will start forcing the flush of column families whose memtables are
-   * backed by the oldest live WAL file.</p>
-   * <p>The oldest WAL files are the ones that are causing all the space amplification.
-   * </p>
-   *  For example, with 15 column families, each with
-   *  <code>write_buffer_size = 128 MB</code>
-   *  <code>max_write_buffer_number = 6</code>
-   *  <code>max_total_wal_size</code> will be calculated to be <code>[15 * 128MB * 6] * 4 =
-   * 45GB</code>
-   * <p>
-   *  The RocksDB wiki has some discussion about how the WAL interacts
-   *  with memtables and flushing of column families, at
-   * <a href="https://github.com/facebook/rocksdb/wiki/Column-Families">...</a>
-   *  </p>
-   * <p>If set to 0 (default), we will dynamically choose the WAL size limit to
-   * be [sum of all write_buffer_size * max_write_buffer_number] * 4</p>
-   * <p>This option takes effect only when there are more than one column family as
-   * otherwise the wal size is dictated by the write_buffer_size.</p>
-   * <p>Default: 0</p>
-   *
+   * backed by the oldest live WAL file (i.e. the ones that are causing all
+   * the space amplification).</p>
    *
    * <p>If set to 0 (default), we will dynamically choose the WAL size limit
-   * to be [sum of all write_buffer_size * max_write_buffer_number] * 4
+   * to be [sum of all write_buffer_size * max_write_buffer_number] * 2
    * </p>
    *
    * @return max total wal size
@@ -299,51 +239,13 @@ public interface MutableDBOptionsInterface<T extends MutableDBOptionsInterface<T
   int statsDumpPeriodSec();
 
   /**
-   * If not zero, dump rocksdb.stats to RocksDB every
-   * {@code statsPersistPeriodSec}
-   *
-   * Default: 600
-   *
-   * @param statsPersistPeriodSec time interval in seconds.
-   * @return the instance of the current object.
-   */
-  T setStatsPersistPeriodSec(int statsPersistPeriodSec);
-
-  /**
-   * If not zero, dump rocksdb.stats to RocksDB every
-   * {@code statsPersistPeriodSec}
-   *
-   * @return time interval in seconds.
-   */
-  int statsPersistPeriodSec();
-
-  /**
-   * If not zero, periodically take stats snapshots and store in memory, the
-   * memory size for stats snapshots is capped at {@code statsHistoryBufferSize}
-   *
-   * Default: 1MB
-   *
-   * @param statsHistoryBufferSize the size of the buffer.
-   * @return the instance of the current object.
-   */
-  T setStatsHistoryBufferSize(long statsHistoryBufferSize);
-
-  /**
-   * If not zero, periodically take stats snapshots and store in memory, the
-   * memory size for stats snapshots is capped at {@code statsHistoryBufferSize}
-   *
-   * @return the size of the buffer.
-   */
-  long statsHistoryBufferSize();
-
-  /**
    * Number of open files that can be used by the DB.  You may need to
    * increase this if your database has a large working set. Value -1 means
    * files opened are always kept open. You can estimate number of files based
    * on {@code target_file_size_base} and {@code target_file_size_multiplier}
    * for level-based compaction. For universal-style compaction, you can usually
    * set it to -1.
-   * Default: -1
+   * Default: 5000
    *
    * @param maxOpenFiles the maximum number of open files.
    * @return the instance of the current object.
@@ -357,7 +259,6 @@ public interface MutableDBOptionsInterface<T extends MutableDBOptionsInterface<T
    * on {@code target_file_size_base} and {@code target_file_size_multiplier}
    * for level-based compaction. For universal-style compaction, you can usually
    * set it to -1.
-   * Default: -1
    *
    * @return the maximum number of open files.
    */
@@ -403,42 +304,6 @@ public interface MutableDBOptionsInterface<T extends MutableDBOptionsInterface<T
    */
   long walBytesPerSync();
 
-  /**
-   * When true, guarantees WAL files have at most {@link #walBytesPerSync()}
-   * bytes submitted for writeback at any given time, and SST files have at most
-   * {@link #bytesPerSync()} bytes pending writeback at any given time. This
-   * can be used to handle cases where processing speed exceeds I/O speed
-   * during file generation, which can lead to a huge sync when the file is
-   * finished, even with {@link #bytesPerSync()} / {@link #walBytesPerSync()}
-   * properly configured.
-   *
-   * - If `sync_file_range` is supported it achieves this by waiting for any
-   *   prior `sync_file_range`s to finish before proceeding. In this way,
-   *   processing (compression, etc.) can proceed uninhibited in the gap
-   *   between `sync_file_range`s, and we block only when I/O falls
-   *   behind.
-   * - Otherwise the `WritableFile::Sync` method is used. Note this mechanism
-   *   always blocks, thus preventing the interleaving of I/O and processing.
-   *
-   * Note: Enabling this option does not provide any additional persistence
-   * guarantees, as it may use `sync_file_range`, which does not write out
-   * metadata.
-   *
-   * Default: false
-   *
-   * @param strictBytesPerSync the bytes per sync
-   * @return the instance of the current object.
-   */
-  T setStrictBytesPerSync(boolean strictBytesPerSync);
-
-  /**
-   * Return the strict byte limit per sync.
-   *
-   * See {@link #setStrictBytesPerSync(boolean)}
-   *
-   * @return the limit in bytes.
-   */
-  boolean strictBytesPerSync();
 
   /**
    * If non-zero, we perform bigger reads when doing compaction. If you're

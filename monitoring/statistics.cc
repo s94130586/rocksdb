@@ -6,17 +6,11 @@
 
 #include "rocksdb/statistics.h"
 
-#include <algorithm>
 #include <cinttypes>
-#include <cstdio>
 
 #include "monitoring/statistics_impl.h"
-#include "rocksdb/convenience.h"
-#include "rocksdb/utilities/customizable_util.h"
-#include "rocksdb/utilities/options_type.h"
-#include "util/string_util.h"
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 
 // The order of items listed in Tickers should be the same as
 // the order listed in TickersNameMap
@@ -110,12 +104,6 @@ const std::vector<std::pair<Tickers, std::string>> TickersNameMap = {
     {COMPACT_READ_BYTES, "rocksdb.compact.read.bytes"},
     {COMPACT_WRITE_BYTES, "rocksdb.compact.write.bytes"},
     {FLUSH_WRITE_BYTES, "rocksdb.flush.write.bytes"},
-    {COMPACT_READ_BYTES_MARKED, "rocksdb.compact.read.marked.bytes"},
-    {COMPACT_READ_BYTES_PERIODIC, "rocksdb.compact.read.periodic.bytes"},
-    {COMPACT_READ_BYTES_TTL, "rocksdb.compact.read.ttl.bytes"},
-    {COMPACT_WRITE_BYTES_MARKED, "rocksdb.compact.write.marked.bytes"},
-    {COMPACT_WRITE_BYTES_PERIODIC, "rocksdb.compact.write.periodic.bytes"},
-    {COMPACT_WRITE_BYTES_TTL, "rocksdb.compact.write.ttl.bytes"},
     {NUMBER_DIRECT_LOAD_TABLE_PROPERTIES,
      "rocksdb.number.direct.load.table.properties"},
     {NUMBER_SUPERVERSION_ACQUIRES, "rocksdb.number.superversion_acquires"},
@@ -173,7 +161,6 @@ const std::vector<std::pair<Tickers, std::string>> TickersNameMap = {
      "rocksdb.txn.overhead.mutex.old.commit.map"},
     {TXN_DUPLICATE_KEY_OVERHEAD, "rocksdb.txn.overhead.duplicate.key"},
     {TXN_SNAPSHOT_MUTEX_OVERHEAD, "rocksdb.txn.overhead.mutex.snapshot"},
-    {TXN_GET_TRY_AGAIN, "rocksdb.txn.get.tryagain"},
     {NUMBER_MULTIGET_KEYS_FOUND, "rocksdb.number.multiget.keys.found"},
     {NO_ITERATOR_CREATED, "rocksdb.num.iterator.created"},
     {NO_ITERATOR_DELETED, "rocksdb.num.iterator.deleted"},
@@ -187,42 +174,6 @@ const std::vector<std::pair<Tickers, std::string>> TickersNameMap = {
      "rocksdb.block.cache.compression.dict.bytes.insert"},
     {BLOCK_CACHE_COMPRESSION_DICT_BYTES_EVICT,
      "rocksdb.block.cache.compression.dict.bytes.evict"},
-    {BLOCK_CACHE_ADD_REDUNDANT, "rocksdb.block.cache.add.redundant"},
-    {BLOCK_CACHE_INDEX_ADD_REDUNDANT,
-     "rocksdb.block.cache.index.add.redundant"},
-    {BLOCK_CACHE_FILTER_ADD_REDUNDANT,
-     "rocksdb.block.cache.filter.add.redundant"},
-    {BLOCK_CACHE_DATA_ADD_REDUNDANT, "rocksdb.block.cache.data.add.redundant"},
-    {BLOCK_CACHE_COMPRESSION_DICT_ADD_REDUNDANT,
-     "rocksdb.block.cache.compression.dict.add.redundant"},
-    {FILES_MARKED_TRASH, "rocksdb.files.marked.trash"},
-    {FILES_DELETED_IMMEDIATELY, "rocksdb.files.deleted.immediately"},
-    {ERROR_HANDLER_BG_ERROR_COUNT, "rocksdb.error.handler.bg.errro.count"},
-    {ERROR_HANDLER_BG_IO_ERROR_COUNT,
-     "rocksdb.error.handler.bg.io.errro.count"},
-    {ERROR_HANDLER_BG_RETRYABLE_IO_ERROR_COUNT,
-     "rocksdb.error.handler.bg.retryable.io.errro.count"},
-    {ERROR_HANDLER_AUTORESUME_COUNT, "rocksdb.error.handler.autoresume.count"},
-    {ERROR_HANDLER_AUTORESUME_RETRY_TOTAL_COUNT,
-     "rocksdb.error.handler.autoresume.retry.total.count"},
-    {ERROR_HANDLER_AUTORESUME_SUCCESS_COUNT,
-     "rocksdb.error.handler.autoresume.success.count"},
-    {MEMTABLE_PAYLOAD_BYTES_AT_FLUSH,
-     "rocksdb.memtable.payload.bytes.at.flush"},
-    {MEMTABLE_GARBAGE_BYTES_AT_FLUSH,
-     "rocksdb.memtable.garbage.bytes.at.flush"},
-    {SECONDARY_CACHE_HITS, "rocksdb.secondary.cache.hits"},
-    {VERIFY_CHECKSUM_READ_BYTES, "rocksdb.verify_checksum.read.bytes"},
-    {BACKUP_READ_BYTES, "rocksdb.backup.read.bytes"},
-    {BACKUP_WRITE_BYTES, "rocksdb.backup.write.bytes"},
-    {REMOTE_COMPACT_READ_BYTES, "rocksdb.remote.compact.read.bytes"},
-    {REMOTE_COMPACT_WRITE_BYTES, "rocksdb.remote.compact.write.bytes"},
-    {HOT_FILE_READ_BYTES, "rocksdb.hot.file.read.bytes"},
-    {WARM_FILE_READ_BYTES, "rocksdb.warm.file.read.bytes"},
-    {COLD_FILE_READ_BYTES, "rocksdb.cold.file.read.bytes"},
-    {HOT_FILE_READ_COUNT, "rocksdb.hot.file.read.count"},
-    {WARM_FILE_READ_COUNT, "rocksdb.warm.file.read.count"},
-    {COLD_FILE_READ_COUNT, "rocksdb.cold.file.read.count"},
 };
 
 const std::vector<std::pair<Histograms, std::string>> HistogramsNameMap = {
@@ -275,49 +226,6 @@ const std::vector<std::pair<Histograms, std::string>> HistogramsNameMap = {
     {FLUSH_TIME, "rocksdb.db.flush.micros"},
     {SST_BATCH_SIZE, "rocksdb.sst.batch.size"},
     {DB_WRITE_WAL_TIME, "rocksdb.db.write.wal.time"},
-    {NUM_INDEX_AND_FILTER_BLOCKS_READ_PER_LEVEL,
-     "rocksdb.num.index.and.filter.blocks.read.per.level"},
-    {NUM_DATA_BLOCKS_READ_PER_LEVEL, "rocksdb.num.data.blocks.read.per.level"},
-    {NUM_SST_READ_PER_LEVEL, "rocksdb.num.sst.read.per.level"},
-    {ERROR_HANDLER_AUTORESUME_RETRY_COUNT,
-     "rocksdb.error.handler.autoresume.retry.count"},
 };
 
-#ifndef ROCKSDB_LITE
-static int RegisterBuiltinStatistics(ObjectLibrary& library,
-                                     const std::string& /*arg*/) {
-  library.AddFactory<Statistics>(
-      StatisticsImpl<TICKER_ENUM_MAX, HISTOGRAM_ENUM_MAX>::kClassName(),
-      [](const std::string& /*uri*/, std::unique_ptr<Statistics>* guard,
-         std::string* /* errmsg */) {
-        guard->reset(
-            new StatisticsImpl<TICKER_ENUM_MAX, HISTOGRAM_ENUM_MAX>(nullptr));
-        return guard->get();
-      });
-  return 1;
-}
-#endif  // ROCKSDB_LITE
-
-Status Statistics::CreateFromString(const ConfigOptions& config_options,
-                                    const std::string& id,
-                                    std::shared_ptr<Statistics>* result) {
-#ifndef ROCKSDB_LITE
-  static std::once_flag once;
-  std::call_once(once, [&]() {
-    RegisterBuiltinStatistics(*(ObjectLibrary::Default().get()), "");
-  });
-#endif  // ROCKSDB_LITE
-  Status s;
-  if (id == "" ||
-      id == StatisticsImpl<TICKER_ENUM_MAX, HISTOGRAM_ENUM_MAX>::kClassName()) {
-    result->reset(
-        new StatisticsImpl<TICKER_ENUM_MAX, HISTOGRAM_ENUM_MAX>(nullptr));
-  } else if (id == kNullptrString) {
-    result->reset();
-  } else {
-    s = LoadSharedObject<Statistics>(config_options, id, nullptr, result);
-  }
-  return s;
-}
-
-}  // namespace ROCKSDB_NAMESPACE
+} // namespace rocksdb

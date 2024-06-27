@@ -7,8 +7,7 @@
 // this source code is governed by a BSD-style license that can be found
 // in the LICENSE file. See the AUTHORS file for names of contributors.
 //
-// DoublySkipList is derived from InlineSkipList (inlineskiplist.h), but it
-// optimizes
+// DoublySkipList is derived from InlineSkipList (inlineskiplist.h), but it optimizes
 // Prev(), which is used in reverse scan.
 
 //
@@ -38,11 +37,9 @@
 #pragma once
 #include <assert.h>
 #include <stdlib.h>
-
 #include <algorithm>
 #include <atomic>
 #include <type_traits>
-
 #include "memory/allocator.h"
 #include "port/likely.h"
 #include "port/port.h"
@@ -50,7 +47,7 @@
 #include "util/coding.h"
 #include "util/random.h"
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 
 template <class Comparator>
 class DoublySkipList {
@@ -59,8 +56,8 @@ class DoublySkipList {
   struct Splice;
 
  public:
-  using DecodedKey =
-      typename std::remove_reference<Comparator>::type::DecodedType;
+  using DecodedKey = \
+    typename std::remove_reference<Comparator>::type::DecodedType;
 
   static const uint16_t kMaxPossibleHeight = 32;
 
@@ -80,9 +77,6 @@ class DoublySkipList {
   // Allocate a splice using allocator.
   Splice* AllocateSplice();
 
-  // Allocate a splice on heap.
-  Splice* AllocateSpliceOnHeap();
-
   // Inserts a key allocated by AllocateKey, after the actual key value
   // has been filled in.
   //
@@ -101,12 +95,6 @@ class DoublySkipList {
   // REQUIRES: nothing that compares equal to key is currently in the list.
   // REQUIRES: no concurrent calls to any of inserts.
   bool InsertWithHint(const char* key, void** hint);
-
-  // Like InsertConcurrently, but with a hint
-  //
-  // REQUIRES: nothing that compares equal to key is currently in the list.
-  // REQUIRES: no concurrent calls that use same hint
-  bool InsertWithHintConcurrently(const char* key, void** hint);
 
   // Like Insert, but external synchronization is not required.
   bool InsertConcurrently(const char* key);
@@ -175,9 +163,6 @@ class DoublySkipList {
     // Retreat to the last entry with a key <= target
     void SeekForPrev(const char* target);
 
-    // Advance to a random entry in the list.
-    void RandomSeek();
-
     // Position at the first entry in list.
     // Final state of iterator is Valid() iff list is not empty.
     void SeekToFirst();
@@ -201,7 +186,7 @@ class DoublySkipList {
   // Immutable after construction
   Comparator const compare_;
   Node* const head_;
-  Node* const tail_;  // Only use for prev pointer
+  Node* const tail_;           // Only use for prev pointer
 
   // Modified only by Insert().  Read racily by readers, but stale
   // values are ok.
@@ -254,18 +239,15 @@ class DoublySkipList {
   // Return head_ if list is empty.
   Node* FindLast() const;
 
-  // Returns a random entry.
-  Node* FindRandomEntry() const;
-
   // Traverses a single level of the list, setting *out_prev to the last
   // node before the key and *out_next to the first node after. Assumes
   // that the key is not present in the skip list. On entry, before should
   // point to a node that is before the key, and after should point to
   // a node that is after the key.  after should be nullptr if a good after
   // node isn't conveniently available.
-  template <bool prefetch_before>
-  void FindSpliceForLevel(const DecodedKey& key, Node* before, Node* after,
-                          int level, Node** out_prev, Node** out_next);
+  template<bool prefetch_before>
+  void FindSpliceForLevel(const DecodedKey& key, Node* before, Node* after, int level,
+                          Node** out_prev, Node** out_next);
 
   // Recomputes Splice levels from highest_level (inclusive) down to
   // lowest_level (inclusive).
@@ -358,16 +340,24 @@ struct DoublySkipList<Comparator>::Node {
   }
 
   bool CASPrev(Node** expected, Node* x) {
-    return prev_.compare_exchange_strong(*expected, x);
+      return prev_.compare_exchange_strong(*expected, x);
   }
 
-  Node* NoBarrier_Prev() { return prev_.load(std::memory_order_relaxed); }
+  Node* NoBarrier_Prev() {
+      return prev_.load(std::memory_order_relaxed);
+  }
 
-  void SetPrev(Node* x) { prev_.store(x, std::memory_order_release); }
+  void SetPrev(Node* x) {
+    prev_.store(x, std::memory_order_release);
+  }
 
-  Node* Prev() { return prev_.load(std::memory_order_acquire); }
+  Node* Prev() {
+    return prev_.load(std::memory_order_acquire);
+  }
 
-  void NoBarrier_SetPrev(Node* x) { prev_.store(x, std::memory_order_relaxed); }
+  void NoBarrier_SetPrev(Node* x) {
+    prev_.store(x, std::memory_order_relaxed);
+  }
 
  private:
   // next_[0] is the lowest level link (level 0).  Higher levels are
@@ -414,16 +404,13 @@ inline void DoublySkipList<Comparator>::Iterator::Prev() {
   auto current = node_;
   do {
     node_ = node_->Prev();
-    // Because we insert node into prev linked list, there may be some node
-    // being inserted into next linked list.
-    // Just ignore them, because their log SequenceNumber must be less then
-    // LastSequence().
+    // Because we insert node into prev linked list, there may be some node being inserted into next linked list.
+    // Just ignore them, because their log SequenceNumber must be less then LastSequence().
   } while (node_ != list_->head_ && node_->Next(0) == nullptr);
   if (node_ == list_->head_) {
     node_ = nullptr;
   } else if (node_->Prev()->Next(0) != node_) {
-    // The Prev() operation maybe happens before prev.CASNext(node_), so node_
-    // has not been inserted into skiplist by other thread.
+    // The Prev() operation maybe happens before prev.CASNext(node_), so node_ has not been inserted into skiplist by other thread.
     // Find prev pos by next-linked-list again.
     node_ = list_->FindLessThan(current->Key());
     if (node_ == list_->head_) {
@@ -447,11 +434,6 @@ inline void DoublySkipList<Comparator>::Iterator::SeekForPrev(
   while (Valid() && list_->LessThan(target, key())) {
     Prev();
   }
-}
-
-template <class Comparator>
-inline void DoublySkipList<Comparator>::Iterator::RandomSeek() {
-  node_ = list_->FindRandomEntry();
 }
 
 template <class Comparator>
@@ -605,48 +587,6 @@ DoublySkipList<Comparator>::FindLast() const {
 }
 
 template <class Comparator>
-typename DoublySkipList<Comparator>::Node*
-DoublySkipList<Comparator>::FindRandomEntry() const {
-  // TODO(bjlemaire): consider adding PREFETCH calls.
-  Node *x = head_, *scan_node = nullptr, *limit_node = nullptr;
-
-  // We start at the max level.
-  // FOr each level, we look at all the nodes at the level, and
-  // we randomly pick one of them. Then decrement the level
-  // and reiterate the process.
-  // eg: assume GetMaxHeight()=5, and there are #100 elements (nodes).
-  // level 4 nodes: lvl_nodes={#1, #15, #67, #84}. Randomly pick #15.
-  // We will consider all the nodes between #15 (inclusive) and #67
-  // (exclusive). #67 is called 'limit_node' here.
-  // level 3 nodes: lvl_nodes={#15, #21, #45, #51}. Randomly choose
-  // #51. #67 remains 'limit_node'.
-  // [...]
-  // level 0 nodes: lvl_nodes={#56,#57,#58,#59}. Randomly pick $57.
-  // Return Node #57.
-  std::vector<Node*> lvl_nodes;
-  Random* rnd = Random::GetTLSInstance();
-  int level = GetMaxHeight() - 1;
-
-  while (level >= 0) {
-    lvl_nodes.clear();
-    scan_node = x;
-    while (scan_node != limit_node) {
-      lvl_nodes.push_back(scan_node);
-      scan_node = scan_node->Next(level);
-    }
-    uint32_t rnd_idx = rnd->Next() % lvl_nodes.size();
-    x = lvl_nodes[rnd_idx];
-    if (rnd_idx + 1 < lvl_nodes.size()) {
-      limit_node = lvl_nodes[rnd_idx + 1];
-    }
-    level--;
-  }
-  // There is a special case where x could still be the head_
-  // (note that the head_ contains no key).
-  return x == head_ ? head_->Next(0) : x;
-}
-
-template <class Comparator>
 uint64_t DoublySkipList<Comparator>::EstimateCount(const char* key) const {
   uint64_t count = 0;
 
@@ -744,18 +684,6 @@ DoublySkipList<Comparator>::AllocateSplice() {
 }
 
 template <class Comparator>
-typename DoublySkipList<Comparator>::Splice*
-DoublySkipList<Comparator>::AllocateSpliceOnHeap() {
-  size_t array_size = sizeof(Node*) * (kMaxHeight_ + 1);
-  char* raw = new char[sizeof(Splice) + array_size * 2];
-  Splice* splice = reinterpret_cast<Splice*>(raw);
-  splice->height_ = 0;
-  splice->prev_ = reinterpret_cast<Node**>(raw + sizeof(Splice));
-  splice->next_ = reinterpret_cast<Node**>(raw + sizeof(Splice) + array_size);
-  return splice;
-}
-
-template <class Comparator>
 bool DoublySkipList<Comparator>::Insert(const char* key) {
   return Insert<false>(key, seq_splice_, false);
 }
@@ -782,18 +710,6 @@ bool DoublySkipList<Comparator>::InsertWithHint(const char* key, void** hint) {
 }
 
 template <class Comparator>
-bool DoublySkipList<Comparator>::InsertWithHintConcurrently(const char* key,
-                                                            void** hint) {
-  assert(hint != nullptr);
-  Splice* splice = reinterpret_cast<Splice*>(*hint);
-  if (splice == nullptr) {
-    splice = AllocateSpliceOnHeap();
-    *hint = reinterpret_cast<void*>(splice);
-  }
-  return Insert<true>(key, splice, true);
-}
-
-template <class Comparator>
 template <bool prefetch_before>
 void DoublySkipList<Comparator>::FindSpliceForLevel(const DecodedKey& key,
                                                     Node* before, Node* after,
@@ -805,8 +721,8 @@ void DoublySkipList<Comparator>::FindSpliceForLevel(const DecodedKey& key,
       PREFETCH(next->Next(level), 0, 1);
     }
     if (prefetch_before == true) {
-      if (next != nullptr && level > 0) {
-        PREFETCH(next->Next(level - 1), 0, 1);
+      if (next != nullptr && level>0) {
+        PREFETCH(next->Next(level-1), 0, 1);
       }
     }
     assert(before == head_ || next == nullptr ||
@@ -823,15 +739,16 @@ void DoublySkipList<Comparator>::FindSpliceForLevel(const DecodedKey& key,
 }
 
 template <class Comparator>
-bool DoublySkipList<Comparator>::InsertPrevListCAS(Node* x, Splice* splice,
-                                                   const DecodedKey& key) {
+bool DoublySkipList<Comparator>::InsertPrevListCAS(Node* x, Splice* splice, const DecodedKey& key){
   Node* prev = splice->prev_[0];
   Node* next = splice->next_[0];
-  if (next != nullptr && compare_(x->Key(), next->Key()) >= 0) {
+  if (next != nullptr &&
+    compare_(x->Key(), next->Key()) >= 0) {
     // duplicate key
     return false;
   }
-  if (prev != head_ && compare_(prev->Key(), x->Key()) >= 0) {
+  if (prev != head_ &&
+    compare_(prev->Key(), x->Key()) >= 0) {
     // duplicate key
     return false;
   }
@@ -841,10 +758,8 @@ bool DoublySkipList<Comparator>::InsertPrevListCAS(Node* x, Splice* splice,
   }
 
   while (!next->CASPrev(&prev, x)) {
-    // If there is one node inserted between prev and x, we only need to try
-    // setting next.prev to x again.
-    // If the node is inserted between x and next, we must adjust insert
-    // position for x.
+    // If there is one node inserted between prev and x, we only need to try setting next.prev to x again.
+    // If the node is inserted between x and next, we must adjust insert position for x.
     if (prev != head_ && !KeyIsAfterNode(key, prev)) {
       do {
         next = prev;
@@ -864,15 +779,18 @@ bool DoublySkipList<Comparator>::InsertPrevListCAS(Node* x, Splice* splice,
   return true;
 }
 
+
 template <class Comparator>
-bool DoublySkipList<Comparator>::InsertPrevList(Node* x, Splice* splice) {
+bool DoublySkipList<Comparator>::InsertPrevList(Node* x, Splice* splice){
   Node* prev = splice->prev_[0];
   Node* next = splice->next_[0];
-  if (next != nullptr && compare_(x->Key(), next->Key()) >= 0) {
+  if (next != nullptr &&
+    compare_(x->Key(), next->Key()) >= 0) {
     // duplicate key
     return false;
   }
-  if (prev != head_ && compare_(prev->Key(), x->Key()) >= 0) {
+  if (prev != head_ &&
+    compare_(prev->Key(), x->Key()) >= 0) {
     // duplicate key
     return false;
   }
@@ -892,7 +810,7 @@ void DoublySkipList<Comparator>::RecomputeSpliceLevels(const DecodedKey& key,
   assert(recompute_level <= splice->height_);
   for (int i = recompute_level - 1; i >= 0; --i) {
     FindSpliceForLevel<true>(key, splice->prev_[i + 1], splice->next_[i + 1], i,
-                             &splice->prev_[i], &splice->next_[i]);
+                       &splice->prev_[i], &splice->next_[i]);
   }
 }
 
@@ -982,7 +900,8 @@ bool DoublySkipList<Comparator>::Insert(const char* key, Splice* splice,
           // we're pessimistic, recompute everything
           recompute_height = max_height;
         }
-      } else if (KeyIsAfterNode(key_decoded, splice->next_[recompute_height])) {
+      } else if (KeyIsAfterNode(key_decoded,
+                                splice->next_[recompute_height])) {
         // key is from after splice
         if (allow_partial_splice_fix) {
           Node* bad = splice->next_[recompute_height];
@@ -1133,4 +1052,4 @@ void DoublySkipList<Comparator>::TEST_Validate() const {
   }
 }
 
-}  // namespace ROCKSDB_NAMESPACE
+}  // namespace rocksdb

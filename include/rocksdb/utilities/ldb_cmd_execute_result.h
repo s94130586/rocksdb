@@ -5,15 +5,11 @@
 //
 #pragma once
 
-#include <string>
-
-#include "rocksdb/rocksdb_namespace.h"
-
 #ifdef FAILED
 #undef FAILED
 #endif
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 
 class LDBCommandExecuteResult {
  public:
@@ -72,4 +68,4 @@ class LDBCommandExecuteResult {
   bool operator!=(const LDBCommandExecuteResult&);
 };
 
-}  // namespace ROCKSDB_NAMESPACE
+}  // namespace rocksdb

@@ -7,8 +7,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
-#if !defined(OS_WIN)
-
 #include "port/port_posix.h"
 
 #include <assert.h>
@@ -23,14 +21,10 @@
 #include <sys/resource.h>
 #include <sys/time.h>
 #include <unistd.h>
-
 #include <cstdlib>
-#include <fstream>
-#include <string>
+#include "logging/logging.h"
 
-#include "util/string_util.h"
-
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 
 // We want to give users opportunity to default all the mutexes to adaptive if
 // not specified otherwise. This enables a quick way to conduct various
@@ -49,8 +43,8 @@ extern const bool kDefaultToAdaptiveMutex = false;
 namespace port {
 
 static int PthreadCall(const char* label, int result) {
-  if (result != 0 && result != ETIMEDOUT && result != EBUSY) {
-    fprintf(stderr, "pthread %s: %s\n", label, errnoStr(result).c_str());
+  if (result != 0 && result != ETIMEDOUT) {
+    fprintf(stderr, "pthread %s: %s\n", label, strerror(result));
     abort();
   }
   return result;
@@ -90,16 +84,6 @@ void Mutex::Unlock() {
   locked_ = false;
 #endif
   PthreadCall("unlock", pthread_mutex_unlock(&mu_));
-}
-
-bool Mutex::TryLock() {
-  bool ret = PthreadCall("trylock", pthread_mutex_trylock(&mu_)) == 0;
-#ifndef NDEBUG
-  if (ret) {
-    locked_ = true;
-  }
-#endif
-  return ret;
 }
 
 void Mutex::AssertHeld() {
@@ -233,63 +217,6 @@ void cacheline_aligned_free(void *memblock) {
   free(memblock);
 }
 
-static size_t GetPageSize() {
-#if defined(OS_LINUX) || defined(_SC_PAGESIZE)
-  long v = sysconf(_SC_PAGESIZE);
-  if (v >= 1024) {
-    return static_cast<size_t>(v);
-  }
-#endif
-  // Default assume 4KB
-  return 4U * 1024U;
-}
-
-const size_t kPageSize = GetPageSize();
-
-void SetCpuPriority(ThreadId id, CpuPriority priority) {
-#ifdef OS_LINUX
-  sched_param param;
-  param.sched_priority = 0;
-  switch (priority) {
-    case CpuPriority::kHigh:
-      sched_setscheduler(id, SCHED_OTHER, &param);
-      setpriority(PRIO_PROCESS, id, -20);
-      break;
-    case CpuPriority::kNormal:
-      sched_setscheduler(id, SCHED_OTHER, &param);
-      setpriority(PRIO_PROCESS, id, 0);
-      break;
-    case CpuPriority::kLow:
-      sched_setscheduler(id, SCHED_OTHER, &param);
-      setpriority(PRIO_PROCESS, id, 19);
-      break;
-    case CpuPriority::kIdle:
-      sched_setscheduler(id, SCHED_IDLE, &param);
-      break;
-    default:
-      assert(false);
-  }
-#else
-  (void)id;
-  (void)priority;
-#endif
-}
-
-int64_t GetProcessID() { return getpid(); }
-
-bool GenerateRfcUuid(std::string* output) {
-  output->clear();
-  std::ifstream f("/proc/sys/kernel/random/uuid");
-  std::getline(f, /*&*/ *output);
-  if (output->size() == 36) {
-    return true;
-  } else {
-    output->clear();
-    return false;
-  }
-}
 
 }  // namespace port
-}  // namespace ROCKSDB_NAMESPACE
-
-#endif
+}  // namespace rocksdb

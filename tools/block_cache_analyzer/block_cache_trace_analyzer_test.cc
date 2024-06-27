@@ -9,7 +9,7 @@
 int main() {
   fprintf(stderr,
           "Please install gflags to run block_cache_trace_analyzer_test\n");
-  return 0;
+  return 1;
 }
 #else
 
@@ -18,17 +18,15 @@ int main() {
 #include <map>
 #include <vector>
 
-#include "rocksdb/db.h"
 #include "rocksdb/env.h"
 #include "rocksdb/status.h"
 #include "rocksdb/trace_reader_writer.h"
-#include "rocksdb/trace_record.h"
 #include "test_util/testharness.h"
 #include "test_util/testutil.h"
 #include "tools/block_cache_analyzer/block_cache_trace_analyzer.h"
 #include "trace_replay/block_cache_tracer.h"
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 
 namespace {
 const uint64_t kBlockSize = 1024;
@@ -46,8 +44,8 @@ const size_t kArgBufferSize = 100000;
 class BlockCacheTracerTest : public testing::Test {
  public:
   BlockCacheTracerTest() {
-    test_path_ = test::PerThreadDBPath("block_cache_trace_analyzer_test");
-    env_ = ROCKSDB_NAMESPACE::Env::Default();
+    test_path_ = test::PerThreadDBPath("block_cache_tracer_test");
+    env_ = rocksdb::Env::Default();
     EXPECT_OK(env_->CreateDir(test_path_));
     trace_file_path_ = test_path_ + "/block_cache_trace";
     block_cache_sim_config_path_ = test_path_ + "/block_cache_sim_config";
@@ -183,9 +181,7 @@ class BlockCacheTracerTest : public testing::Test {
             analyze_get_spatial_locality_labels_,
         "-analyze_get_spatial_locality_buckets=" +
             analyze_get_spatial_locality_buckets_,
-        "-analyze_correlation_coefficients_labels=all",
-        "-skew_labels=all",
-        "-skew_buckets=10,50,100"};
+        "-analyze_correlation_coefficients_labels=all"};
     char arg_buffer[kArgBufferSize];
     char* argv[kMaxArgCount];
     int argc = 0;
@@ -198,8 +194,7 @@ class BlockCacheTracerTest : public testing::Test {
       argv[argc++] = arg_buffer + cursor;
       cursor += static_cast<int>(arg.size()) + 1;
     }
-    ASSERT_EQ(0,
-              ROCKSDB_NAMESPACE::block_cache_trace_analyzer_tool(argc, argv));
+    ASSERT_EQ(0, rocksdb::block_cache_trace_analyzer_tool(argc, argv));
   }
 
   Env* env_;
@@ -227,9 +222,7 @@ TEST_F(BlockCacheTracerTest, BlockCacheAnalyzer) {
     std::unique_ptr<TraceWriter> trace_writer;
     ASSERT_OK(NewFileTraceWriter(env_, env_options_, trace_file_path_,
                                  &trace_writer));
-    const auto& clock = env_->GetSystemClock();
-    BlockCacheTraceWriter writer(clock.get(), trace_opt,
-                                 std::move(trace_writer));
+    BlockCacheTraceWriter writer(env_, trace_opt, std::move(trace_writer));
     ASSERT_OK(writer.WriteHeader());
     WriteBlockAccess(&writer, 0, TraceType::kBlockTraceDataBlock, 50);
     ASSERT_OK(env_->FileExists(trace_file_path_));
@@ -331,39 +324,12 @@ TEST_F(BlockCacheTracerTest, BlockCacheAnalyzer) {
           }
           num_misses += ParseInt(substr);
         }
-        ASSERT_EQ(51u, num_misses);
+        ASSERT_EQ(51, num_misses);
         ASSERT_FALSE(getline(mt_file, line));
         mt_file.close();
         ASSERT_OK(env_->DeleteFile(miss_timeline_path));
       }
     }
-  }
-  {
-    // Validate the skewness csv file.
-    const std::string skewness_file_path = test_path_ + "/all_skewness";
-    std::ifstream skew_file(skewness_file_path);
-    // Read header.
-    std::string line;
-    ASSERT_TRUE(getline(skew_file, line));
-    std::stringstream ss(line);
-    double sum_percent = 0;
-    while (getline(skew_file, line)) {
-      std::stringstream ss_naccess(line);
-      std::string substr;
-      bool read_label = false;
-      while (ss_naccess.good()) {
-        ASSERT_TRUE(getline(ss_naccess, substr, ','));
-        if (!read_label) {
-          read_label = true;
-          continue;
-        }
-        sum_percent += ParseDouble(substr);
-      }
-    }
-    ASSERT_EQ(100.0, sum_percent);
-    ASSERT_FALSE(getline(skew_file, line));
-    skew_file.close();
-    ASSERT_OK(env_->DeleteFile(skewness_file_path));
   }
   {
     // Validate the timeline csv files.
@@ -598,7 +564,7 @@ TEST_F(BlockCacheTracerTest, BlockCacheAnalyzer) {
         sum_percent += ParseDouble(percent);
         nrows++;
       }
-      ASSERT_EQ(11u, nrows);
+      ASSERT_EQ(11, nrows);
       ASSERT_EQ(100.0, sum_percent);
       ASSERT_OK(env_->DeleteFile(filename));
     }
@@ -614,11 +580,9 @@ TEST_F(BlockCacheTracerTest, MixedBlocks) {
     // kSSTStoringEvenKeys.
     TraceOptions trace_opt;
     std::unique_ptr<TraceWriter> trace_writer;
-    const auto& clock = env_->GetSystemClock();
     ASSERT_OK(NewFileTraceWriter(env_, env_options_, trace_file_path_,
                                  &trace_writer));
-    BlockCacheTraceWriter writer(clock.get(), trace_opt,
-                                 std::move(trace_writer));
+    BlockCacheTraceWriter writer(env_, trace_opt, std::move(trace_writer));
     ASSERT_OK(writer.WriteHeader());
     // Write blocks of different types.
     WriteBlockAccess(&writer, 0, TraceType::kBlockTraceUncompressionDictBlock,
@@ -638,19 +602,15 @@ TEST_F(BlockCacheTracerTest, MixedBlocks) {
     BlockCacheTraceReader reader(std::move(trace_reader));
     BlockCacheTraceHeader header;
     ASSERT_OK(reader.ReadHeader(&header));
-    ASSERT_EQ(static_cast<uint32_t>(kMajorVersion),
-              header.rocksdb_major_version);
-    ASSERT_EQ(static_cast<uint32_t>(kMinorVersion),
-              header.rocksdb_minor_version);
+    ASSERT_EQ(kMajorVersion, header.rocksdb_major_version);
+    ASSERT_EQ(kMinorVersion, header.rocksdb_minor_version);
     // Read blocks.
-    BlockCacheTraceAnalyzer analyzer(
-        trace_file_path_,
-        /*output_miss_ratio_curve_path=*/"",
-        /*human_readable_trace_file_path=*/"",
-        /*compute_reuse_distance=*/true,
-        /*mrc_only=*/false,
-        /*is_block_cache_human_readable_trace=*/false,
-        /*simulator=*/nullptr);
+    BlockCacheTraceAnalyzer analyzer(trace_file_path_,
+                                     /*output_miss_ratio_curve_path=*/"",
+                                     /*human_readable_trace_file_path=*/"",
+                                     /*compute_reuse_distance=*/true,
+                                     /*mrc_only=*/false,
+                                     /*simulator=*/nullptr);
     // The analyzer ends when it detects an incomplete access record.
     ASSERT_EQ(Status::Incomplete(""), analyzer.Analyze());
     const uint64_t expected_num_cfs = 1;
@@ -708,7 +668,7 @@ TEST_F(BlockCacheTracerTest, MixedBlocks) {
   }
 }
 
-}  // namespace ROCKSDB_NAMESPACE
+}  // namespace rocksdb
 
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);

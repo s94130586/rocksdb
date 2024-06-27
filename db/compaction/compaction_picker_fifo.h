@@ -12,23 +12,21 @@
 
 #include "db/compaction/compaction_picker.h"
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 class FIFOCompactionPicker : public CompactionPicker {
  public:
-  FIFOCompactionPicker(const ImmutableOptions& ioptions,
+  FIFOCompactionPicker(const ImmutableCFOptions& ioptions,
                        const InternalKeyComparator* icmp)
       : CompactionPicker(ioptions, icmp) {}
 
   virtual Compaction* PickCompaction(
       const std::string& cf_name, const MutableCFOptions& mutable_cf_options,
-      const MutableDBOptions& mutable_db_options, VersionStorageInfo* version,
-      LogBuffer* log_buffer,
+      VersionStorageInfo* version, LogBuffer* log_buffer,
       SequenceNumber earliest_memtable_seqno = kMaxSequenceNumber) override;
 
   virtual Compaction* CompactRange(
       const std::string& cf_name, const MutableCFOptions& mutable_cf_options,
-      const MutableDBOptions& mutable_db_options, VersionStorageInfo* vstorage,
-      int input_level, int output_level,
+      VersionStorageInfo* vstorage, int input_level, int output_level,
       const CompactRangeOptions& compact_range_options,
       const InternalKey* begin, const InternalKey* end,
       InternalKey** compaction_end, bool* manual_conflict,
@@ -43,21 +41,13 @@ class FIFOCompactionPicker : public CompactionPicker {
  private:
   Compaction* PickTTLCompaction(const std::string& cf_name,
                                 const MutableCFOptions& mutable_cf_options,
-                                const MutableDBOptions& mutable_db_options,
                                 VersionStorageInfo* version,
                                 LogBuffer* log_buffer);
 
   Compaction* PickSizeCompaction(const std::string& cf_name,
                                  const MutableCFOptions& mutable_cf_options,
-                                 const MutableDBOptions& mutable_db_options,
                                  VersionStorageInfo* version,
                                  LogBuffer* log_buffer);
-
-  Compaction* PickCompactionToWarm(const std::string& cf_name,
-                                   const MutableCFOptions& mutable_cf_options,
-                                   const MutableDBOptions& mutable_db_options,
-                                   VersionStorageInfo* version,
-                                   LogBuffer* log_buffer);
 };
-}  // namespace ROCKSDB_NAMESPACE
+}  // namespace rocksdb
 #endif  // !ROCKSDB_LITE

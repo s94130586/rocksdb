@@ -4,52 +4,32 @@
 //  (found in the LICENSE.Apache file in the root directory).
 
 #include <atomic>
-#include <fstream>
 #include <memory>
 #include <thread>
 #include <vector>
-
 #include "db/db_test_util.h"
 #include "db/write_batch_internal.h"
 #include "db/write_thread.h"
 #include "port/port.h"
 #include "port/stack_trace.h"
+#include "test_util/fault_injection_test_env.h"
 #include "test_util/sync_point.h"
-#include "util/random.h"
 #include "util/string_util.h"
-#include "utilities/fault_injection_env.h"
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 
 // Test variations of WriteImpl.
 class DBWriteTest : public DBTestBase, public testing::WithParamInterface<int> {
  public:
-  DBWriteTest() : DBTestBase("db_write_test", /*env_do_fsync=*/true) {}
+  DBWriteTest() : DBTestBase("/db_write_test") {}
 
   Options GetOptions() { return DBTestBase::GetOptions(GetParam()); }
 
   void Open() { DBTestBase::Reopen(GetOptions()); }
 };
 
-TEST_P(DBWriteTest, WriteEmptyBatch) {
-  Options options = GetOptions();
-  options.write_buffer_size = 65536;
-  Reopen(options);
-  WriteOptions write_options;
-  WriteBatch batch;
-  Random rnd(301);
-  // Trigger a flush so that we will enter `WaitForPendingWrites`.
-  for (auto i = 0; i < 10; i++) {
-    batch.Clear();
-    ASSERT_OK(dbfull()->Write(write_options, &batch));
-    ASSERT_OK(batch.Put(std::to_string(i), rnd.RandomString(10240)));
-    ASSERT_OK(dbfull()->Write(write_options, &batch));
-  }
-}
-
 // It is invalid to do sync write while disabling WAL.
 TEST_P(DBWriteTest, SyncAndDisableWAL) {
-  Reopen(GetOptions());
   WriteOptions write_options;
   write_options.sync = true;
   write_options.disableWAL = true;
@@ -57,223 +37,6 @@ TEST_P(DBWriteTest, SyncAndDisableWAL) {
   WriteBatch batch;
   ASSERT_OK(batch.Put("foo", "bar"));
   ASSERT_TRUE(dbfull()->Write(write_options, &batch).IsInvalidArgument());
-}
-
-TEST_P(DBWriteTest, WriteStallRemoveNoSlowdownWrite) {
-  Options options = GetOptions();
-  options.level0_stop_writes_trigger = options.level0_slowdown_writes_trigger =
-      4;
-  std::vector<port::Thread> threads;
-  std::atomic<int> thread_num(0);
-  port::Mutex mutex;
-  port::CondVar cv(&mutex);
-  // Guarded by mutex
-  int writers = 0;
-
-  Reopen(options);
-
-  std::function<void()> write_slowdown_func = [&]() {
-    int a = thread_num.fetch_add(1);
-    std::string key = "foo" + std::to_string(a);
-    WriteOptions wo;
-    wo.no_slowdown = false;
-    ASSERT_OK(dbfull()->Put(wo, key, "bar"));
-  };
-  std::function<void()> write_no_slowdown_func = [&]() {
-    int a = thread_num.fetch_add(1);
-    std::string key = "foo" + std::to_string(a);
-    WriteOptions wo;
-    wo.no_slowdown = true;
-    Status s = dbfull()->Put(wo, key, "bar");
-    ASSERT_TRUE(s.ok() || s.IsIncomplete());
-  };
-  std::function<void(void*)> unblock_main_thread_func = [&](void*) {
-    mutex.Lock();
-    ++writers;
-    cv.SignalAll();
-    mutex.Unlock();
-  };
-
-  // Create 3 L0 files and schedule 4th without waiting
-  ASSERT_OK(Put("foo" + std::to_string(thread_num.fetch_add(1)), "bar"));
-  ASSERT_OK(Flush());
-  ASSERT_OK(Put("foo" + std::to_string(thread_num.fetch_add(1)), "bar"));
-  ASSERT_OK(Flush());
-  ASSERT_OK(Put("foo" + std::to_string(thread_num.fetch_add(1)), "bar"));
-  ASSERT_OK(Flush());
-  ASSERT_OK(Put("foo" + std::to_string(thread_num.fetch_add(1)), "bar"));
-
-  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->SetCallBack(
-      "WriteThread::JoinBatchGroup:Start", unblock_main_thread_func);
-  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->LoadDependency(
-      {{"DBWriteTest::WriteStallRemoveNoSlowdownWrite:1",
-        "DBImpl::BackgroundCallFlush:start"},
-       {"DBWriteTest::WriteStallRemoveNoSlowdownWrite:2",
-        "DBImplWrite::PipelinedWriteImpl:AfterJoinBatchGroup"},
-       // Make compaction start wait for the write stall to be detected and
-       // implemented by a write group leader
-       {"DBWriteTest::WriteStallRemoveNoSlowdownWrite:3",
-        "BackgroundCallCompaction:0"}});
-  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->EnableProcessing();
-
-  // Schedule creation of 4th L0 file without waiting. This will seal the
-  // memtable and then wait for a sync point before writing the file. We need
-  // to do it this way because SwitchMemtable() needs to enter the
-  // write_thread
-  FlushOptions fopt;
-  fopt.wait = false;
-  ASSERT_OK(dbfull()->Flush(fopt));
-
-  // Create a mix of slowdown/no_slowdown write threads
-  mutex.Lock();
-  // First leader
-  threads.emplace_back(write_slowdown_func);
-  while (writers != 1) {
-    cv.Wait();
-  }
-
-  // Second leader. Will stall writes
-  // Build a writers list with no slowdown in the middle:
-  //  +-------------+
-  //  | slowdown    +<----+ newest
-  //  +--+----------+
-  //     |
-  //     v
-  //  +--+----------+
-  //  | no slowdown |
-  //  +--+----------+
-  //     |
-  //     v
-  //  +--+----------+
-  //  | slowdown    +
-  //  +-------------+
-  threads.emplace_back(write_slowdown_func);
-  while (writers != 2) {
-    cv.Wait();
-  }
-  threads.emplace_back(write_no_slowdown_func);
-  while (writers != 3) {
-    cv.Wait();
-  }
-  threads.emplace_back(write_slowdown_func);
-  while (writers != 4) {
-    cv.Wait();
-  }
-
-  mutex.Unlock();
-
-  TEST_SYNC_POINT("DBWriteTest::WriteStallRemoveNoSlowdownWrite:1");
-  ASSERT_OK(dbfull()->TEST_WaitForFlushMemTable(nullptr));
-  // This would have triggered a write stall. Unblock the write group leader
-  TEST_SYNC_POINT("DBWriteTest::WriteStallRemoveNoSlowdownWrite:2");
-  // The leader is going to create missing newer links. When the leader
-  // finishes, the next leader is going to delay writes and fail writers with
-  // no_slowdown
-
-  TEST_SYNC_POINT("DBWriteTest::WriteStallRemoveNoSlowdownWrite:3");
-  for (auto& t : threads) {
-    t.join();
-  }
-
-  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->DisableProcessing();
-  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->ClearAllCallBacks();
-}
-
-TEST_P(DBWriteTest, WriteThreadHangOnWriteStall) {
-  Options options = GetOptions();
-  options.level0_stop_writes_trigger = options.level0_slowdown_writes_trigger = 4;
-  std::vector<port::Thread> threads;
-  std::atomic<int> thread_num(0);
-  port::Mutex mutex;
-  port::CondVar cv(&mutex);
-  // Guarded by mutex
-  int writers = 0;
-
-  Reopen(options);
-
-  std::function<void()> write_slowdown_func = [&]() {
-    int a = thread_num.fetch_add(1);
-    std::string key = "foo" + std::to_string(a);
-    WriteOptions wo;
-    wo.no_slowdown = false;
-    ASSERT_OK(dbfull()->Put(wo, key, "bar"));
-  };
-  std::function<void()> write_no_slowdown_func = [&]() {
-    int a = thread_num.fetch_add(1);
-    std::string key = "foo" + std::to_string(a);
-    WriteOptions wo;
-    wo.no_slowdown = true;
-    Status s = dbfull()->Put(wo, key, "bar");
-    ASSERT_TRUE(s.ok() || s.IsIncomplete());
-  };
-  std::function<void(void *)> unblock_main_thread_func = [&](void *) {
-    mutex.Lock();
-    ++writers;
-    cv.SignalAll();
-    mutex.Unlock();
-  };
-
-  // Create 3 L0 files and schedule 4th without waiting
-  ASSERT_OK(Put("foo" + std::to_string(thread_num.fetch_add(1)), "bar"));
-  ASSERT_OK(Flush());
-  ASSERT_OK(Put("foo" + std::to_string(thread_num.fetch_add(1)), "bar"));
-  ASSERT_OK(Flush());
-  ASSERT_OK(Put("foo" + std::to_string(thread_num.fetch_add(1)), "bar"));
-  ASSERT_OK(Flush());
-  ASSERT_OK(Put("foo" + std::to_string(thread_num.fetch_add(1)), "bar"));
-
-  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->SetCallBack(
-      "WriteThread::JoinBatchGroup:Start", unblock_main_thread_func);
-  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->LoadDependency(
-      {{"DBWriteTest::WriteThreadHangOnWriteStall:1",
-        "DBImpl::BackgroundCallFlush:start"},
-       {"DBWriteTest::WriteThreadHangOnWriteStall:2",
-        "DBImpl::WriteImpl:BeforeLeaderEnters"},
-       // Make compaction start wait for the write stall to be detected and
-       // implemented by a write group leader
-       {"DBWriteTest::WriteThreadHangOnWriteStall:3",
-        "BackgroundCallCompaction:0"}});
-  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->EnableProcessing();
-
-  // Schedule creation of 4th L0 file without waiting. This will seal the
-  // memtable and then wait for a sync point before writing the file. We need
-  // to do it this way because SwitchMemtable() needs to enter the
-  // write_thread
-  FlushOptions fopt;
-  fopt.wait = false;
-  ASSERT_OK(dbfull()->Flush(fopt));
-
-  // Create a mix of slowdown/no_slowdown write threads
-  mutex.Lock();
-  // First leader
-  threads.emplace_back(write_slowdown_func);
-  while (writers != 1) {
-    cv.Wait();
-  }
-  // Second leader. Will stall writes
-  threads.emplace_back(write_slowdown_func);
-  threads.emplace_back(write_no_slowdown_func);
-  threads.emplace_back(write_slowdown_func);
-  threads.emplace_back(write_no_slowdown_func);
-  threads.emplace_back(write_slowdown_func);
-  while (writers != 6) {
-    cv.Wait();
-  }
-  mutex.Unlock();
-
-  TEST_SYNC_POINT("DBWriteTest::WriteThreadHangOnWriteStall:1");
-  ASSERT_OK(dbfull()->TEST_WaitForFlushMemTable(nullptr));
-  // This would have triggered a write stall. Unblock the write group leader
-  TEST_SYNC_POINT("DBWriteTest::WriteThreadHangOnWriteStall:2");
-  // The leader is going to create missing newer links. When the leader finishes,
-  // the next leader is going to delay writes and fail writers with no_slowdown
-
-  TEST_SYNC_POINT("DBWriteTest::WriteThreadHangOnWriteStall:3");
-  for (auto& t : threads) {
-    t.join();
-  }
-  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->DisableProcessing();
-  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->ClearAllCallBacks();
 }
 
 TEST_P(DBWriteTest, IOErrorOnWALWritePropagateToWriteThreadFollower) {
@@ -326,11 +89,6 @@ TEST_P(DBWriteTest, IOErrorOnWALWritePropagateToWriteThreadFollower) {
     threads[i].join();
   }
   ASSERT_EQ(1, leader_count);
-
-  // The Failed PUT operations can cause a BG error to be set.
-  // Mark it as Checked for the ASSERT_STATUS_CHECKED
-  dbfull()->Resume().PermitUncheckedError();
-
   // Close before mock_env destruct.
   Close();
 }
@@ -344,91 +102,11 @@ TEST_P(DBWriteTest, ManualWalFlushInEffect) {
   ASSERT_TRUE(dbfull()->FlushWAL(false).ok());
   ASSERT_TRUE(dbfull()->TEST_WALBufferIsEmpty());
   // try the 2nd wal created during SwitchWAL
-  ASSERT_OK(dbfull()->TEST_SwitchWAL());
+  dbfull()->TEST_SwitchWAL();
   ASSERT_TRUE(Put("key" + ToString(0), "value").ok());
   ASSERT_TRUE(options.manual_wal_flush != dbfull()->TEST_WALBufferIsEmpty());
   ASSERT_TRUE(dbfull()->FlushWAL(false).ok());
   ASSERT_TRUE(dbfull()->TEST_WALBufferIsEmpty());
-}
-
-TEST_P(DBWriteTest, UnflushedPutRaceWithTrackedWalSync) {
-  // Repro race condition bug where unflushed WAL data extended the synced size
-  // recorded to MANIFEST despite being unrecoverable.
-  Options options = GetOptions();
-  std::unique_ptr<FaultInjectionTestEnv> fault_env(
-      new FaultInjectionTestEnv(env_));
-  options.env = fault_env.get();
-  options.manual_wal_flush = true;
-  options.track_and_verify_wals_in_manifest = true;
-  Reopen(options);
-
-  ASSERT_OK(Put("key1", "val1"));
-
-  SyncPoint::GetInstance()->SetCallBack(
-      "DBImpl::SyncWAL:Begin",
-      [this](void* /* arg */) { ASSERT_OK(Put("key2", "val2")); });
-  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->EnableProcessing();
-
-  ASSERT_OK(db_->FlushWAL(true /* sync */));
-
-  // Ensure callback ran.
-  ASSERT_EQ("val2", Get("key2"));
-
-  Close();
-
-  // Simulate full loss of unsynced data. This drops "key2" -> "val2" from the
-  // DB WAL.
-  fault_env->DropUnsyncedFileData();
-
-  Reopen(options);
-
-  // Need to close before `fault_env` goes out of scope.
-  Close();
-}
-
-TEST_P(DBWriteTest, InactiveWalFullySyncedBeforeUntracked) {
-  // Repro bug where a WAL is appended and switched after
-  // `FlushWAL(true /* sync */)`'s sync finishes and before it untracks fully
-  // synced inactive logs. Previously such a WAL would be wrongly untracked
-  // so the final append would never be synced.
-  Options options = GetOptions();
-  std::unique_ptr<FaultInjectionTestEnv> fault_env(
-      new FaultInjectionTestEnv(env_));
-  options.env = fault_env.get();
-  Reopen(options);
-
-  ASSERT_OK(Put("key1", "val1"));
-
-  SyncPoint::GetInstance()->SetCallBack(
-      "DBImpl::SyncWAL:BeforeMarkLogsSynced:1", [this](void* /* arg */) {
-        ASSERT_OK(Put("key2", "val2"));
-        ASSERT_OK(dbfull()->TEST_SwitchMemtable());
-      });
-  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->EnableProcessing();
-
-  ASSERT_OK(db_->FlushWAL(true /* sync */));
-
-  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->DisableProcessing();
-  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->ClearAllCallBacks();
-
-  ASSERT_OK(Put("key3", "val3"));
-
-  ASSERT_OK(db_->FlushWAL(true /* sync */));
-
-  Close();
-
-  // Simulate full loss of unsynced data. This should drop nothing since we did
-  // `FlushWAL(true /* sync */)` before `Close()`.
-  fault_env->DropUnsyncedFileData();
-
-  Reopen(options);
-
-  ASSERT_EQ("val1", Get("key1"));
-  ASSERT_EQ("val2", Get("key2"));
-  ASSERT_EQ("val3", Get("key3"));
-
-  // Need to close before `fault_env` goes out of scope.
-  Close();
 }
 
 TEST_P(DBWriteTest, IOErrorOnWALWriteTriggersReadOnlyMode) {
@@ -455,9 +133,7 @@ TEST_P(DBWriteTest, IOErrorOnWALWriteTriggersReadOnlyMode) {
     }
     */
     if (!options.manual_wal_flush) {
-      ASSERT_NOK(res);
-    } else {
-      ASSERT_OK(res);
+      ASSERT_FALSE(res.ok());
     }
   }
   // Close before mock_env destruct.
@@ -478,7 +154,7 @@ TEST_P(DBWriteTest, IOErrorOnSwitchMemtable) {
   mock_env->SetFilesystemActive(false, Status::IOError("Not active"));
   Status s;
   for (int i = 0; i < 4 * 512; ++i) {
-    s = Put(Key(i), rnd.RandomString(1024));
+    s = Put(Key(i), RandomString(&rnd, 1024));
     if (!s.ok()) {
       break;
     }
@@ -501,7 +177,7 @@ TEST_P(DBWriteTest, LockWalInEffect) {
   ASSERT_TRUE(dbfull()->TEST_WALBufferIsEmpty(false));
   ASSERT_OK(dbfull()->UnlockWAL());
   // try the 2nd wal created during SwitchWAL
-  ASSERT_OK(dbfull()->TEST_SwitchWAL());
+  dbfull()->TEST_SwitchWAL();
   ASSERT_OK(Put("key" + ToString(0), "value"));
   ASSERT_TRUE(options.manual_wal_flush != dbfull()->TEST_WALBufferIsEmpty());
   ASSERT_OK(dbfull()->LockWAL());
@@ -509,50 +185,11 @@ TEST_P(DBWriteTest, LockWalInEffect) {
   ASSERT_OK(dbfull()->UnlockWAL());
 }
 
-TEST_P(DBWriteTest, ConcurrentlyDisabledWAL) {
-    Options options = GetOptions();
-    options.statistics = ROCKSDB_NAMESPACE::CreateDBStatistics();
-    options.statistics->set_stats_level(StatsLevel::kAll);
-    Reopen(options);
-    std::string wal_key_prefix = "WAL_KEY_";
-    std::string no_wal_key_prefix = "K_";
-    // 100 KB value each for NO-WAL operation
-    std::string no_wal_value(1024 * 100, 'X');
-    // 1B value each for WAL operation
-    std::string wal_value = "0";
-    std::thread threads[10];
-    for (int t = 0; t < 10; t++) {
-        threads[t] = std::thread([t, wal_key_prefix, wal_value, no_wal_key_prefix, no_wal_value, this] {
-            for(int i = 0; i < 10; i++) {
-              ROCKSDB_NAMESPACE::WriteOptions write_option_disable;
-              write_option_disable.disableWAL = true;
-              ROCKSDB_NAMESPACE::WriteOptions write_option_default;
-              std::string no_wal_key = no_wal_key_prefix + std::to_string(t) +
-                                       "_" + std::to_string(i);
-              ASSERT_OK(
-                  this->Put(no_wal_key, no_wal_value, write_option_disable));
-              std::string wal_key =
-                  wal_key_prefix + std::to_string(i) + "_" + std::to_string(i);
-              ASSERT_OK(this->Put(wal_key, wal_value, write_option_default));
-              ASSERT_OK(dbfull()->SyncWAL());
-            }
-            return;
-        });
-    }
-    for (auto& t: threads) {
-        t.join();
-    }
-    uint64_t bytes_num = options.statistics->getTickerCount(
-        ROCKSDB_NAMESPACE::Tickers::WAL_FILE_BYTES);
-    // written WAL size should less than 100KB (even included HEADER & FOOTER overhead)
-    ASSERT_LE(bytes_num, 1024 * 100);
-}
-
 TEST_P(DBWriteTest, MultiThreadWrite) {
   Options options = GetOptions();
   std::unique_ptr<FaultInjectionTestEnv> mock_env(
       new FaultInjectionTestEnv(env_));
-  if (!options.enable_multi_batch_write) {
+  if (!options.enable_multi_thread_write) {
     return;
   }
   constexpr int kNumThreads = 4;
@@ -608,122 +245,16 @@ TEST_P(DBWriteTest, MultiThreadWrite) {
   Close();
 }
 
-class SimpleCallback : public PostWriteCallback {
-  std::function<void(SequenceNumber)> f_;
-
- public:
-  SimpleCallback(std::function<void(SequenceNumber)>&& f) : f_(f) {}
-
-  void Callback(SequenceNumber seq) override { f_(seq); }
-};
-
-TEST_P(DBWriteTest, PostWriteCallback) {
-  Options options = GetOptions();
-  if (options.two_write_queues) {
-    // Not compatible.
-    return;
-  }
-  Reopen(options);
-
-  std::vector<port::Thread> threads;
-
-  port::Mutex the_first_can_exit_write_mutex;
-  the_first_can_exit_write_mutex.Lock();
-  port::Mutex can_flush_mutex;
-  can_flush_mutex.Lock();
-  port::Mutex the_second_can_enter_write_mutex;
-  the_second_can_enter_write_mutex.Lock();
-  port::Mutex the_second_can_exit_write_mutex;
-  the_second_can_exit_write_mutex.Lock();
-
-  std::atomic<uint64_t> written(0);
-  std::atomic<bool> flushed(false);
-
-  threads.push_back(port::Thread([&] {
-    WriteBatch batch;
-    WriteOptions opts;
-    opts.sync = false;
-    opts.disableWAL = true;
-    SimpleCallback callback([&](SequenceNumber seq) {
-      ASSERT_NE(seq, 0);
-      the_second_can_enter_write_mutex.Unlock();
-      can_flush_mutex.Unlock();
-      the_first_can_exit_write_mutex.Lock();
-      the_second_can_exit_write_mutex.Unlock();
-      written.fetch_add(1, std::memory_order_relaxed);
-    });
-    batch.Put("key", "value");
-    ASSERT_OK(dbfull()->Write(opts, &batch, &callback));
-  }));
-  threads.push_back(port::Thread([&] {
-    WriteBatch batch;
-    WriteOptions opts;
-    opts.sync = false;
-    opts.disableWAL = true;
-    SimpleCallback callback([&](SequenceNumber seq) {
-      ASSERT_NE(seq, 0);
-      the_second_can_exit_write_mutex.Lock();
-      written.fetch_add(1, std::memory_order_relaxed);
-    });
-    batch.Put("key", "value");
-    the_second_can_enter_write_mutex.Lock();
-    ASSERT_OK(dbfull()->Write(opts, &batch, &callback));
-  }));
-  // Flush will enter write thread and wait for pending writes.
-  threads.push_back(port::Thread([&] {
-    FlushOptions opts;
-    opts.wait = false;
-    can_flush_mutex.Lock();
-    ASSERT_OK(dbfull()->Flush(opts));
-    flushed.store(true, std::memory_order_relaxed);
-  }));
-
-  std::this_thread::sleep_for(std::chrono::milliseconds{100});
-  ASSERT_EQ(written.load(std::memory_order_relaxed), 0);
-  ASSERT_EQ(flushed.load(std::memory_order_relaxed), false);
-
-  the_first_can_exit_write_mutex.Unlock();
-  size_t wait = 0;
-  while (!flushed.load(std::memory_order_relaxed)) {
-    std::this_thread::sleep_for(std::chrono::milliseconds{10});
-    wait += 1;
-    ASSERT_LE(wait, 100);
-  }
-  ASSERT_EQ(written.load(std::memory_order_relaxed), 2);
-
-  for (auto& t : threads) {
-    t.join();
-  }
-}
-
-TEST_P(DBWriteTest, PostWriteCallbackEmptyBatch) {
-  Options options = GetOptions();
-  if (options.two_write_queues) {
-    // Not compatible.
-    return;
-  }
-  Reopen(options);
-  WriteBatch batch;
-  WriteOptions opts;
-  opts.sync = false;
-  opts.disableWAL = true;
-  SequenceNumber seq = 0;
-  SimpleCallback callback([&](SequenceNumber s) { seq = s; });
-  ASSERT_OK(dbfull()->Write(opts, &batch, &callback));
-  ASSERT_NE(seq, 0);
-}
-
 INSTANTIATE_TEST_CASE_P(DBWriteTestInstance, DBWriteTest,
                         testing::Values(DBTestBase::kDefault,
                                         DBTestBase::kConcurrentWALWrites,
                                         DBTestBase::kPipelinedWrite,
-                                        DBTestBase::kMultiBatchWrite));
+                                        DBTestBase::kMultiThreadWrite));
 
-}  // namespace ROCKSDB_NAMESPACE
+}  // namespace rocksdb
 
 int main(int argc, char** argv) {
-  ROCKSDB_NAMESPACE::port::InstallStackTraceHandler();
+  rocksdb::port::InstallStackTraceHandler();
   ::testing::InitGoogleTest(&argc, argv);
-  RegisterCustomObjects(argc, argv);
   return RUN_ALL_TESTS();
 }

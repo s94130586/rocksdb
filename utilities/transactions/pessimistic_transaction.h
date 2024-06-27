@@ -28,7 +28,7 @@
 #include "utilities/transactions/transaction_base.h"
 #include "utilities/transactions/transaction_util.h"
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 
 class PessimisticTransactionDB;
 
@@ -40,11 +40,8 @@ class PessimisticTransaction : public TransactionBaseImpl {
   PessimisticTransaction(TransactionDB* db, const WriteOptions& write_options,
                          const TransactionOptions& txn_options,
                          const bool init = true);
-  // No copying allowed
-  PessimisticTransaction(const PessimisticTransaction&) = delete;
-  void operator=(const PessimisticTransaction&) = delete;
 
-  ~PessimisticTransaction() override;
+  virtual ~PessimisticTransaction();
 
   void Reinitialize(TransactionDB* txn_db, const WriteOptions& write_options,
                     const TransactionOptions& txn_options);
@@ -116,17 +113,10 @@ class PessimisticTransaction : public TransactionBaseImpl {
 
   int64_t GetDeadlockDetectDepth() const { return deadlock_detect_depth_; }
 
-  virtual Status GetRangeLock(ColumnFamilyHandle* column_family,
-                              const Endpoint& start_key,
-                              const Endpoint& end_key) override;
-
  protected:
   // Refer to
   // TransactionOptions::use_only_the_last_commit_time_batch_for_recovery
   bool use_only_the_last_commit_time_batch_for_recovery_ = false;
-  // Refer to
-  // TransactionOptions::skip_prepare
-  bool skip_prepare_ = false;
 
   virtual Status PrepareInternal() = 0;
 
@@ -143,7 +133,7 @@ class PessimisticTransaction : public TransactionBaseImpl {
 
   virtual void Initialize(const TransactionOptions& txn_options);
 
-  Status LockBatch(WriteBatch* batch, LockTracker* keys_to_unlock);
+  Status LockBatch(WriteBatch* batch, TransactionKeyMap* keys_to_unlock);
 
   Status TryLock(ColumnFamilyHandle* column_family, const Slice& key,
                  bool read_only, bool exclusive, const bool do_validate = true,
@@ -176,7 +166,7 @@ class PessimisticTransaction : public TransactionBaseImpl {
   //
   // If waiting_key_ is not null, then the pointer should always point to
   // a valid string object. The reason is that it is only non-null when the
-  // transaction is blocked in the PointLockManager::AcquireWithTimeout
+  // transaction is blocked in the TransactionLockMgr::AcquireWithTimeout
   // function. At that point, the key string object is one of the function
   // parameters.
   uint32_t waiting_cf_id_;
@@ -203,17 +193,18 @@ class PessimisticTransaction : public TransactionBaseImpl {
 
   void UnlockGetForUpdate(ColumnFamilyHandle* column_family,
                           const Slice& key) override;
+
+  // No copying allowed
+  PessimisticTransaction(const PessimisticTransaction&);
+  void operator=(const PessimisticTransaction&);
 };
 
 class WriteCommittedTxn : public PessimisticTransaction {
  public:
   WriteCommittedTxn(TransactionDB* db, const WriteOptions& write_options,
                     const TransactionOptions& txn_options);
-  // No copying allowed
-  WriteCommittedTxn(const WriteCommittedTxn&) = delete;
-  void operator=(const WriteCommittedTxn&) = delete;
 
-  ~WriteCommittedTxn() override {}
+  virtual ~WriteCommittedTxn() {}
 
  private:
   Status PrepareInternal() override;
@@ -225,8 +216,12 @@ class WriteCommittedTxn : public PessimisticTransaction {
   Status CommitInternal() override;
 
   Status RollbackInternal() override;
+
+  // No copying allowed
+  WriteCommittedTxn(const WriteCommittedTxn&);
+  void operator=(const WriteCommittedTxn&);
 };
 
-}  // namespace ROCKSDB_NAMESPACE
+}  // namespace rocksdb
 
 #endif  // ROCKSDB_LITE

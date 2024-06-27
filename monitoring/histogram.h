@@ -16,7 +16,7 @@
 #include <map>
 #include <mutex>
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 
 class HistogramBucketMapper {
  public:
@@ -48,6 +48,7 @@ class HistogramBucketMapper {
   std::vector<uint64_t> bucketValues_;
   uint64_t maxBucketValue_;
   uint64_t minBucketValue_;
+  std::map<uint64_t, uint64_t> valueIndexMap_;
 };
 
 struct HistogramStat {
@@ -145,4 +146,4 @@ class HistogramImpl : public Histogram {
   std::mutex mutex_;
 };
 
-}  // namespace ROCKSDB_NAMESPACE
+}  // namespace rocksdb

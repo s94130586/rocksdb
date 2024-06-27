@@ -9,7 +9,7 @@
 #ifndef ROCKSDB_LITE
 #ifdef OPENSSL
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 namespace encryption {
 
 const unsigned char KEY[33] =
@@ -36,7 +36,7 @@ class EncryptionTest
   void GenerateCiphertext(const unsigned char* iv) {
     Random rnd(666);
     std::string random_string =
-        rnd.HumanReadableString(static_cast<int>(MAX_SIZE));
+        test::RandomHumanReadableString(&rnd, static_cast<int>(MAX_SIZE));
     memcpy(plaintext, random_string.data(), MAX_SIZE);
 
     int ret = 1;
@@ -56,12 +56,6 @@ class EncryptionTest
       case EncryptionMethod::kAES256_CTR:
         cipher = EVP_aes_256_ctr();
         break;
-#if OPENSSL_VERSION_NUMBER >= 0x1010100fL && !defined(OPENSSL_NO_SM4)
-      // Openssl support SM4 after 1.1.1 release version.
-      case EncryptionMethod::kSM4_CTR:
-        cipher = EVP_sm4_ctr();
-        break;
-#endif
       default:
         assert(false);
     }
@@ -152,26 +146,15 @@ TEST_P(EncryptionTest, EncryptionTest) {
   EXPECT_TRUE(TestEncryption(16, 16 * 2, IV_OVERFLOW_FULL));
 }
 
-// Openssl support SM4 after 1.1.1 release version.
-#if OPENSSL_VERSION_NUMBER < 0x1010100fL || defined(OPENSSL_NO_SM4)
 INSTANTIATE_TEST_CASE_P(
     EncryptionTestInstance, EncryptionTest,
     testing::Combine(testing::Bool(),
                      testing::Values(EncryptionMethod::kAES128_CTR,
                                      EncryptionMethod::kAES192_CTR,
                                      EncryptionMethod::kAES256_CTR)));
-#else
-INSTANTIATE_TEST_CASE_P(
-    EncryptionTestInstance, EncryptionTest,
-    testing::Combine(testing::Bool(),
-                     testing::Values(EncryptionMethod::kAES128_CTR,
-                                     EncryptionMethod::kAES192_CTR,
-                                     EncryptionMethod::kAES256_CTR,
-                                     EncryptionMethod::kSM4_CTR)));
-#endif
 
 }  // namespace encryption
-}  // namespace ROCKSDB_NAMESPACE
+}  // namespace rocksdb
 
 #endif  // OPENSSL
 #endif  // !ROCKSDB_LITE

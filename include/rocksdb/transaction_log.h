@@ -11,10 +11,10 @@
 #include "rocksdb/types.h"
 #include "rocksdb/write_batch.h"
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 
 class LogFile;
-using VectorLogPtr = std::vector<std::unique_ptr<LogFile>>;
+typedef std::vector<std::unique_ptr<LogFile>> VectorLogPtr;
 
 enum WalFileType {
   /* Indicates that WAL file is in archive directory. WAL files are moved from
@@ -118,4 +118,4 @@ class TransactionLogIterator {
         : verify_checksums_(verify_checksums) {}
   };
 };
-}  // namespace ROCKSDB_NAMESPACE
+}  //  namespace rocksdb

@@ -4,7 +4,7 @@
 //  (found in the LICENSE.Apache file in the root directory).
 //
 // This file implements the "bridge" between Java and C++ for
-// ROCKSDB_NAMESPACE::LRUCache.
+// rocksdb::LRUCache.
 
 #include <jni.h>
 
@@ -20,16 +20,12 @@ jlong Java_org_rocksdb_LRUCache_newLRUCache(JNIEnv* /*env*/, jclass /*jcls*/,
                                             jlong jcapacity,
                                             jint jnum_shard_bits,
                                             jboolean jstrict_capacity_limit,
-                                            jdouble jhigh_pri_pool_ratio,
-                                            jdouble jlow_pri_pool_ratio) {
-  auto* sptr_lru_cache = new std::shared_ptr<ROCKSDB_NAMESPACE::Cache>(
-      ROCKSDB_NAMESPACE::NewLRUCache(
+                                            jdouble jhigh_pri_pool_ratio) {
+  auto* sptr_lru_cache =
+      new std::shared_ptr<rocksdb::Cache>(rocksdb::NewLRUCache(
           static_cast<size_t>(jcapacity), static_cast<int>(jnum_shard_bits),
           static_cast<bool>(jstrict_capacity_limit),
-          static_cast<double>(jhigh_pri_pool_ratio),
-          nullptr /* memory_allocator */, rocksdb::kDefaultToAdaptiveMutex,
-          rocksdb::kDontChargeCacheMetadata,
-          static_cast<double>(jlow_pri_pool_ratio)));
+          static_cast<double>(jhigh_pri_pool_ratio)));
   return reinterpret_cast<jlong>(sptr_lru_cache);
 }
 
@@ -42,6 +38,6 @@ void Java_org_rocksdb_LRUCache_disposeInternal(JNIEnv* /*env*/,
                                                jobject /*jobj*/,
                                                jlong jhandle) {
   auto* sptr_lru_cache =
-      reinterpret_cast<std::shared_ptr<ROCKSDB_NAMESPACE::Cache>*>(jhandle);
+      reinterpret_cast<std::shared_ptr<rocksdb::Cache>*>(jhandle);
   delete sptr_lru_cache;  // delete std::shared_ptr
 }

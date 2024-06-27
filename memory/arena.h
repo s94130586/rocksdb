@@ -23,7 +23,7 @@
 #include "memory/allocator.h"
 #include "util/mutexlock.h"
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 
 class Arena : public Allocator {
  public:
@@ -86,7 +86,7 @@ class Arena : public Allocator {
   // Number of bytes allocated in one block
   const size_t kBlockSize;
   // Array of new[] allocated memory blocks
-  using Blocks = std::vector<char*>;
+  typedef std::vector<char*> Blocks;
   Blocks blocks_;
 
   struct MmapInfo {
@@ -138,4 +138,4 @@ inline char* Arena::Allocate(size_t bytes) {
 //  2. the multiple of align unit.
 extern size_t OptimizeBlockSize(size_t block_size);
 
-}  // namespace ROCKSDB_NAMESPACE
+}  // namespace rocksdb

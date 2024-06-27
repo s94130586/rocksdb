@@ -9,7 +9,7 @@
 
 #include "rocksdb/env.h"
 
-namespace ROCKSDB_NAMESPACE {
+namespace rocksdb {
 namespace encryption {
 
 class AESEncryptionProvider;
@@ -20,7 +20,6 @@ enum class EncryptionMethod : int {
   kAES128_CTR = 2,
   kAES192_CTR = 3,
   kAES256_CTR = 4,
-  kSM4_CTR = 5,
 };
 
 inline size_t KeySize(EncryptionMethod method) {
@@ -31,8 +30,6 @@ inline size_t KeySize(EncryptionMethod method) {
       return 24;
     case EncryptionMethod::kAES256_CTR:
       return 32;
-    case EncryptionMethod::kSM4_CTR:
-      return 16;
     default:
       return 0;
   };
@@ -55,17 +52,11 @@ class KeyManager {
                          FileEncryptionInfo* file_info) = 0;
   virtual Status NewFile(const std::string& fname,
                          FileEncryptionInfo* file_info) = 0;
-  // Used with both file and directory.
   virtual Status DeleteFile(const std::string& fname) = 0;
   virtual Status LinkFile(const std::string& src_fname,
                           const std::string& dst_fname) = 0;
-  // Provide additional hint of physical file when the key name doesn't map to
-  // one. A typical use case of this is atomically deleting a directory by
-  // renaming it first.
-  virtual Status DeleteFileExt(const std::string& fname,
-                               const std::string& /*physical_fname*/) {
-    return DeleteFile(fname);
-  }
+  virtual Status RenameFile(const std::string& src_fname,
+                            const std::string& dst_fname) = 0;
 };
 
 // An Env with underlying files being encrypted. It holds a reference to an
@@ -74,7 +65,7 @@ class KeyManagedEncryptedEnv : public EnvWrapper {
  public:
   KeyManagedEncryptedEnv(Env* base_env,
                          std::shared_ptr<KeyManager>& key_manager,
-                         std::shared_ptr<AESEncryptionProvider>& provider,
+                         std::unique_ptr<AESEncryptionProvider>&& provider,
                          std::unique_ptr<Env>&& encrypted_env);
 
   virtual ~KeyManagedEncryptedEnv();
@@ -105,11 +96,9 @@ class KeyManagedEncryptedEnv : public EnvWrapper {
   Status RenameFile(const std::string& src_fname,
                     const std::string& dst_fname) override;
 
-  Status DeleteDir(const std::string& dname) override;
-
  private:
   const std::shared_ptr<KeyManager> key_manager_;
-  const std::shared_ptr<AESEncryptionProvider> provider_;
+  const std::unique_ptr<AESEncryptionProvider> provider_;
   const std::unique_ptr<Env> encrypted_env_;
 };
 
@@ -117,7 +106,7 @@ extern Env* NewKeyManagedEncryptedEnv(Env* base_env,
                                       std::shared_ptr<KeyManager>& key_manager);
 
 }  // namespace encryption
-}  // namespace ROCKSDB_NAMESPACE
+}  // namespace rocksdb
 
 #endif  // OPENSSL
 #endif  // !ROCKSDB_LITE

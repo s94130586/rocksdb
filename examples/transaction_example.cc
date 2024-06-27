@@ -11,21 +11,9 @@
 #include "rocksdb/utilities/transaction.h"
 #include "rocksdb/utilities/transaction_db.h"
 
-using ROCKSDB_NAMESPACE::Options;
-using ROCKSDB_NAMESPACE::ReadOptions;
-using ROCKSDB_NAMESPACE::Snapshot;
-using ROCKSDB_NAMESPACE::Status;
-using ROCKSDB_NAMESPACE::Transaction;
-using ROCKSDB_NAMESPACE::TransactionDB;
-using ROCKSDB_NAMESPACE::TransactionDBOptions;
-using ROCKSDB_NAMESPACE::TransactionOptions;
-using ROCKSDB_NAMESPACE::WriteOptions;
+using namespace rocksdb;
 
-#if defined(OS_WIN)
-std::string kDBPath = "C:\\Windows\\TEMP\\rocksdb_transaction_example";
-#else
 std::string kDBPath = "/tmp/rocksdb_transaction_example";
-#endif
 
 int main() {
   // open DB
@@ -62,32 +50,16 @@ int main() {
 
   // Read a key OUTSIDE this transaction. Does not affect txn.
   s = txn_db->Get(read_options, "abc", &value);
-  assert(s.IsNotFound());
 
   // Write a key OUTSIDE of this transaction.
-  // Does not affect txn since this is an unrelated key.
+  // Does not affect txn since this is an unrelated key.  If we wrote key 'abc'
+  // here, the transaction would fail to commit.
   s = txn_db->Put(write_options, "xyz", "zzz");
-  assert(s.ok());
-
-  // Write a key OUTSIDE of this transaction.
-  // Fail because the key conflicts with the key written in txn.
-  s = txn_db->Put(write_options, "abc", "def");
-  assert(s.subcode() == Status::kLockTimeout);
-
-  // Value for key "xyz" has been committed, can be read in txn.
-  s = txn->Get(read_options, "xyz", &value);
-  assert(s.ok());
-  assert(value == "zzz");
 
   // Commit transaction
   s = txn->Commit();
   assert(s.ok());
   delete txn;
-
-  // Value is committed, can be read now.
-  s = txn_db->Get(read_options, "abc", &value);
-  assert(s.ok());
-  assert(value == "def");
 
   ////////////////////////////////////////////////////////
   //
@@ -106,25 +78,14 @@ int main() {
   s = txn_db->Put(write_options, "abc", "xyz");
   assert(s.ok());
 
-  // Read the latest committed value.
-  s = txn->Get(read_options, "abc", &value);
-  assert(s.ok());
-  assert(value == "xyz");
-
-  // Read the snapshotted value.
-  read_options.snapshot = snapshot;
-  s = txn->Get(read_options, "abc", &value);
-  assert(s.ok());
-  assert(value == "def");
-
   // Attempt to read a key using the snapshot.  This will fail since
   // the previous write outside this txn conflicts with this read.
+  read_options.snapshot = snapshot;
   s = txn->GetForUpdate(read_options, "abc", &value);
   assert(s.IsBusy());
 
   txn->Rollback();
 
-  // Snapshot will be released upon deleting the transaction.
   delete txn;
   // Clear snapshot from read options since it is no longer valid
   read_options.snapshot = nullptr;
@@ -148,13 +109,10 @@ int main() {
   // Do some reads and writes to key "x"
   read_options.snapshot = txn_db->GetSnapshot();
   s = txn->Get(read_options, "x", &value);
-  assert(s.IsNotFound());
-  s = txn->Put("x", "x");
-  assert(s.ok());
+  txn->Put("x", "x");
 
   // Do a write outside of the transaction to key "y"
-  s = txn_db->Put(write_options, "y", "y1");
-  assert(s.ok());
+  s = txn_db->Put(write_options, "y", "y");
 
   // Set a new snapshot in the transaction
   txn->SetSnapshot();
@@ -165,10 +123,7 @@ int main() {
   // Since the snapshot was advanced, the write done outside of the
   // transaction does not conflict.
   s = txn->GetForUpdate(read_options, "y", &value);
-  assert(s.ok());
-  assert(value == "y1");
-  s = txn->Put("y", "y2");
-  assert(s.ok());
+  txn->Put("y", "y");
 
   // Decide we want to revert the last write from this transaction.
   txn->RollbackToSavePoint();
@@ -180,18 +135,9 @@ int main() {
   // Clear snapshot from read options since it is no longer valid
   read_options.snapshot = nullptr;
 
-  // db state is at the save point.
-  s = txn_db->Get(read_options, "x", &value);
-  assert(s.ok());
-  assert(value == "x");
-
-  s = txn_db->Get(read_options, "y", &value);
-  assert(s.ok());
-  assert(value == "y1");
-
   // Cleanup
   delete txn_db;
-  ROCKSDB_NAMESPACE::DestroyDB(kDBPath, options);
+  DestroyDB(kDBPath, options);
   return 0;
 }
 
